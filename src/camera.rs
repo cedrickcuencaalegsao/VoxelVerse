@@ -46,7 +46,7 @@ impl Plugin for CameraPlugin {
 fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 40.0, 0.0).looking_at(Vec3::new(1.0, 40.0, 0.0), Vec3::Y),
+            transform: Transform::from_xyz(0.0, 80.0, 0.0).looking_at(Vec3::new(10.0, 30.0, 10.0), Vec3::Y),
             ..default()
         },
         PlayerCamera::default(),

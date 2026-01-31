@@ -42,30 +42,22 @@ impl Chunk {
             Face::Top => (x, y + 1, z),
             Face::Bottom => {
                 if y == 0 {
-                    return false;
+                    return false; // Don't render bottom of world
                 }
                 (x, y - 1, z)
             }
             Face::North => (x, y, z + 1),
-            Face::South => {
-                if z == 0 {
-                    return true;
-                }
-                (x, y, z - 1)
-            }
+            Face::South => (x, y, z.wrapping_sub(1)),
             Face::East => (x + 1, y, z),
-            Face::West => {
-                if x == 0 {
-                    return true;
-                }
-                (x - 1, y, z)
-            }
+            Face::West => (x.wrapping_sub(1), y, z),
         };
 
+        // If neighbor is outside chunk bounds, render the face
         if nx >= CHUNK_SIZE || ny >= CHUNK_HEIGHT || nz >= CHUNK_SIZE {
             return true;
         }
 
+        // Check if neighbor block is transparent
         let neighbor = self.get_block(nx, ny, nz);
         neighbor.is_transparent()
     }

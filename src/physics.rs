@@ -56,7 +56,7 @@ fn check_collision(
             below_pos.z.div_euclid(CHUNK_SIZE as i32),
         );
 
-        if let Some(&_chunk_entity) = world.chunks.get(&chunk_pos) {
+        if let Some(&chunk_entity) = world.chunks.get(&chunk_pos) {
             grounded.0 = true;
         } else {
             grounded.0 = false;

@@ -66,9 +66,10 @@ fn generate_chunks(
             let mesh_handle = meshes.add(mesh);
             
             let material = materials.add(StandardMaterial {
-                base_color: Color::srgb(0.3, 0.7, 0.3),
+                base_color: Color::WHITE,
                 perceptual_roughness: 0.9,
                 metallic: 0.0,
+                cull_mode: None, // Render both sides of faces
                 ..default()
             });
 
