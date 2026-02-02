@@ -20,10 +20,10 @@ fn player_movement(
         let right = Vec3::new(camera.yaw.cos(), 0.0, -camera.yaw.sin());
 
         // Forward/Backward
-        if keyboard.pressed(KeyCode::KeyW) {
+        if keyboard.pressed(KeyCode::KeyS) {
             velocity += forward;
         }
-        if keyboard.pressed(KeyCode::KeyS) {
+        if keyboard.pressed(KeyCode::KeyW) {
             velocity -= forward;
         }
 
