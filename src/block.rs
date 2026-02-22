@@ -9,32 +9,38 @@ pub enum BlockType {
     Sand,
     Wood,
     Leaves,
+    Water,
 }
 
 impl BlockType {
     pub fn is_solid(&self) -> bool {
+        // Water is "solid" for the mesher (it has a mesh), 
+        // but physically you'd handle it differently in physics.rs
         !matches!(self, BlockType::Air)
     }
 
     pub fn is_transparent(&self) -> bool {
-        matches!(self, BlockType::Air | BlockType::Leaves)
+        // Water and Leaves allow light/faces to be seen through them
+        matches!(self, BlockType::Air | BlockType::Leaves | BlockType::Water)
     }
 
     pub fn get_color(&self) -> Color {
         match self {
             BlockType::Air => Color::NONE,
             BlockType::Grass => Color::srgb(0.2, 0.8, 0.2),
-            BlockType::Dirt => Color::srgb(0.55, 0.35, 0.2),
+            BlockType::Dirt => Color::srgb(0.45, 0.3, 0.15),
             BlockType::Stone => Color::srgb(0.5, 0.5, 0.5),
             BlockType::Sand => Color::srgb(0.9, 0.85, 0.6),
-            BlockType::Wood => Color::srgb(0.4, 0.25, 0.1),
-            BlockType::Leaves => Color::srgb(0.1, 0.6, 0.1),
+            BlockType::Wood => Color::srgb(0.35, 0.2, 0.1),
+            BlockType::Leaves => Color::srgb(0.1, 0.5, 0.1),
+            BlockType::Water => Color::srgba(0.0, 0.3, 0.8, 0.8), // Deep Blue with some alpha
         }
     }
 
     pub fn get_top_color(&self) -> Color {
         match self {
             BlockType::Grass => Color::srgb(0.3, 0.7, 0.3),
+            BlockType::Water => Color::srgb(0.1, 0.4, 0.9), // Slightly lighter surface
             _ => self.get_color(),
         }
     }
