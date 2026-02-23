@@ -12,6 +12,7 @@ pub enum BlockType {
     Water,
 }
 
+#[allow(dead_code)]
 impl BlockType {
     pub fn is_solid(&self) -> bool {
         // Water is "solid" for the mesher (it has a mesh), 

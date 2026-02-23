@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use crate::camera::{Player, PlayerCamera};
+use crate::physics::{Velocity, Grounded};
 
 pub struct InputPlugin;
 
@@ -10,50 +11,47 @@ impl Plugin for InputPlugin {
 }
 
 fn player_movement(
-    time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(&Player, &PlayerCamera, &mut Transform)>,
+    mut query: Query<(&Player, &PlayerCamera, &mut Velocity, &Grounded)>,
 ) {
-    for (player, camera, mut transform) in query.iter_mut() {
-        let mut velocity = Vec3::ZERO;
+    for (player, camera, mut velocity, grounded) in query.iter_mut() {
+        let mut input_dir = Vec3::ZERO;
         let forward = Vec3::new(camera.yaw.sin(), 0.0, camera.yaw.cos());
         let right = Vec3::new(camera.yaw.cos(), 0.0, -camera.yaw.sin());
 
         // Forward/Backward
         if keyboard.pressed(KeyCode::KeyS) {
-            velocity += forward;
+            input_dir += forward;
         }
         if keyboard.pressed(KeyCode::KeyW) {
-            velocity -= forward;
+            input_dir -= forward;
         }
 
         // Left/Right
         if keyboard.pressed(KeyCode::KeyA) {
-            velocity -= right;
+            input_dir -= right;
         }
         if keyboard.pressed(KeyCode::KeyD) {
-            velocity += right;
+            input_dir += right;
         }
 
-        // Up/Down
-        if keyboard.pressed(KeyCode::Space) {
-            velocity.y += 1.0;
-        }
-        if keyboard.pressed(KeyCode::ShiftLeft) {
-            velocity.y -= 1.0;
+        let speed = if keyboard.pressed(KeyCode::ControlLeft) {
+            player.speed * player.sprint_multiplier
+        } else {
+            player.speed
+        };
+
+        if input_dir.length() > 0.0 {
+            input_dir = input_dir.normalize();
+            velocity.0.x = input_dir.x * speed;
+            velocity.0.z = input_dir.z * speed;
+        } else {
+            velocity.0.x = 0.0;
+            velocity.0.z = 0.0;
         }
 
-        // Normalize and apply speed
-        if velocity.length() > 0.0 {
-            velocity = velocity.normalize();
-            
-            let speed = if keyboard.pressed(KeyCode::ControlLeft) {
-                player.speed * player.sprint_multiplier
-            } else {
-                player.speed
-            };
-
-            transform.translation += velocity * speed * time.delta_seconds();
+        if keyboard.just_pressed(KeyCode::Space) && grounded.0 {
+            velocity.0.y = 8.0;
         }
     }
 }
