@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use crate::camera::{Player, PlayerCamera};
-use crate::physics::Velocity; 
+use crate::physics::Velocity;
 
 pub struct InputPlugin;
 
@@ -19,7 +19,6 @@ fn player_movement(
         let right = Vec3::new(camera.yaw.cos(), 0.0, -camera.yaw.sin());
 
         let mut horizontal = Vec3::ZERO;
-
         if keyboard.pressed(KeyCode::KeyW) { horizontal -= forward; }
         if keyboard.pressed(KeyCode::KeyS) { horizontal += forward; }
         if keyboard.pressed(KeyCode::KeyA) { horizontal -= right; }
@@ -35,7 +34,6 @@ fn player_movement(
             horizontal = horizontal.normalize() * speed;
         }
 
-        // Only overwrite horizontal axes — leave Y to physics
         velocity.0.x = horizontal.x;
         velocity.0.z = horizontal.z;
     }

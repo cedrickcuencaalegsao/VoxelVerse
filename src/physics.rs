@@ -48,6 +48,7 @@ fn apply_physics(
     time: Res<Time>,
     world: Res<GameWorld>,
     chunks: Query<&crate::chunk::Chunk>,
+    // Player body — drives position, no camera here
     mut query: Query<(&mut Transform, &mut Velocity, &mut Grounded), With<Player>>,
 ) {
     let dt = time.delta_seconds();
@@ -55,23 +56,20 @@ fn apply_physics(
     for (mut transform, mut velocity, mut grounded) in query.iter_mut() {
         velocity.0.y += GRAVITY * dt;
 
-        // transform.translation.y is the EYE (camera) position.
-        // Feet = eye - PLAYER_HEIGHT.
-        let eye = transform.translation;
-        let feet_y = eye.y - PLAYER_HEIGHT;
+        // transform.translation is the player body / eye position
+        let pos = transform.translation;
+        let feet_y = pos.y - PLAYER_HEIGHT;
 
-        // Resolve Y in feet space
         let new_feet_y = resolve_y(
             &world, &chunks,
-            eye.x, feet_y + velocity.0.y * dt, eye.z,
+            pos.x, feet_y + velocity.0.y * dt, pos.z,
             &mut velocity.0.y, &mut grounded,
         );
 
-        // Resolve X and Z in feet space
-        let new_x = resolve_xz(&world, &chunks, eye.x + velocity.0.x * dt, new_feet_y, eye.z, true);
-        let new_z = resolve_xz(&world, &chunks, new_x, new_feet_y, eye.z + velocity.0.z * dt, false);
+        let new_x = resolve_xz(&world, &chunks, pos.x + velocity.0.x * dt, new_feet_y, pos.z, true);
+        let new_z = resolve_xz(&world, &chunks, new_x, new_feet_y, pos.z + velocity.0.z * dt, false);
 
-        // Store back as eye position
+        // Update player body position — camera reads this in mouse_look
         transform.translation = Vec3::new(new_x, new_feet_y + PLAYER_HEIGHT, new_z);
     }
 }
@@ -97,19 +95,16 @@ fn resolve_y(
     let corners = player_corners(x, z);
 
     if *vel_y <= 0.0 {
-        // Check the block directly under feet
         let foot_block_y = (new_feet_y - 0.001).floor() as i32;
         for (cx, cz) in &corners {
             if is_solid_at(world, chunks, *cx, foot_block_y, *cz) {
                 grounded.0 = true;
                 *vel_y = 0.0;
-                // Feet land on TOP of the block: block_y + 1.0
                 return foot_block_y as f32 + 1.0;
             }
         }
         grounded.0 = false;
     } else {
-        // Check the block at head level (feet + PLAYER_HEIGHT)
         let head_block_y = (new_feet_y + PLAYER_HEIGHT).floor() as i32;
         for (cx, cz) in &corners {
             if is_solid_at(world, chunks, *cx, head_block_y, *cz) {
