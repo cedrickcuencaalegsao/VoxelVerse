@@ -24,7 +24,17 @@ fn player_movement(
         if keyboard.pressed(KeyCode::KeyA) { horizontal -= right; }
         if keyboard.pressed(KeyCode::KeyD) { horizontal += right; }
 
-        let speed = if keyboard.pressed(KeyCode::ControlLeft) {
+        // Sprint on Shift+W, but not when pressing digits (those are POV switches)
+        let shift_held = keyboard.pressed(KeyCode::ShiftLeft)
+            || keyboard.pressed(KeyCode::ShiftRight);
+        let digit_held = keyboard.pressed(KeyCode::Digit1)
+            || keyboard.pressed(KeyCode::Digit2)
+            || keyboard.pressed(KeyCode::Digit3)
+            || keyboard.pressed(KeyCode::Digit4);
+
+        let sprinting = shift_held && !digit_held && keyboard.pressed(KeyCode::KeyW);
+
+        let speed = if sprinting {
             player.speed * player.sprint_multiplier
         } else {
             player.speed
