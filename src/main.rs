@@ -35,6 +35,7 @@ fn main() {
         ))
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
         .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, set_window_title))
         .run();
 }
 
@@ -42,7 +43,6 @@ fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    // Load block.glb once — all chunks will share this
     let gltf_handle = asset_server.load("block.glb");
     commands.insert_resource(BlockRegistry::new(gltf_handle));
 
@@ -56,4 +56,13 @@ fn setup(
             .looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
+}
+
+fn set_window_title(
+    world: Res<crate::world::World>,
+    mut windows: Query<&mut Window>,
+) {
+    if let Ok(mut window) = windows.get_single_mut() {
+        window.title = format!("VoxelVerse — seed: {}", world.seed);
+    }
 }

@@ -1,24 +1,33 @@
 use crate::block::BlockType;
-use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
+use crate::block_registry::BlockRegistry;
+use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 use std::collections::HashMap;
-use crate::block_registry::BlockRegistry;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Resource)]
 pub struct World {
     pub chunks: HashMap<IVec3, Entity>,
     pub noise: Perlin,
     pub render_distance: i32,
+    pub seed: u32,
 }
 
 impl Default for World {
     fn default() -> Self {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| (d.as_millis() & 0xFFFFFFFF) as u32)
+            .unwrap_or(42);
+
+        info!("World seed: {}", seed);
+
         Self {
             chunks: HashMap::new(),
-            // Using a fixed seed for consistency during testing
-            noise: Perlin::new(42),
-            render_distance: 6, // Increased slightly for better views
+            noise: Perlin::new(seed),
+            render_distance: 6,
+            seed,
         }
     }
 }
@@ -33,14 +42,12 @@ impl Plugin for WorldPlugin {
 }
 
 // --- NOISE CONFIGURATION ---
-const SEED: u32 = 42;
-const TERRAIN_SCALE: f64 = 0.01; // How "spread out" the terrain is
-const DAMPENING: f64 = 0.5; // Overall height multiplier
-const OCTAVES: usize = 7; // Detail layers
-const PERSISTENCE: f64 = 0.5; // How much each octave contributes (0.5 = half as much as previous)
-const LACUNARITY: f64 = 2.0; // How much frequency increases per octave
+const TERRAIN_SCALE: f64 = 0.01;
+const DAMPENING: f64 = 0.6;
+const OCTAVES: usize = 7;
+const PERSISTENCE: f64 = 0.5;
+const LACUNARITY: f64 = 2.0;
 
-/// Calculates multi-octave Perlin noise
 fn fbm_noise(
     noise: &Perlin,
     x: f64,
@@ -61,15 +68,12 @@ fn fbm_noise(
         frequency *= lacunarity;
     }
 
-    total / max_value // Normalized to [-1, 1]
+    total / max_value
 }
 
 fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
-    // --- ORIGIN SAFE ZONE ---
-    // Force a flat grassy platform around 0,0 for the city.
-    // 48 blocks radius = 3 chunks in every direction, fully guaranteed dry land.
     const CITY_RADIUS: f32 = 48.0;
-    const CITY_HEIGHT: usize = 35; // comfortably above water level (28) and sand (29)
+    const CITY_HEIGHT: usize = 35;
 
     let dist_from_origin = ((x as f32).powi(2) + (z as f32).powi(2)).sqrt();
 
@@ -77,16 +81,14 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
         return CITY_HEIGHT;
     }
 
-    // Smooth blend from city height into natural terrain
     const BLEND_RADIUS: f32 = 80.0;
     let blend_t = if dist_from_origin < BLEND_RADIUS {
         let t = (dist_from_origin - CITY_RADIUS) / (BLEND_RADIUS - CITY_RADIUS);
-        t * t * (3.0 - 2.0 * t) // smoothstep
+        t * t * (3.0 - 2.0 * t)
     } else {
         1.0
     };
 
-    // ... rest of your existing noise calculation ...
     let x_f = x as f64 * TERRAIN_SCALE;
     let z_f = z as f64 * TERRAIN_SCALE;
 
@@ -101,10 +103,13 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
 
     let base_height = 30.0;
     let mountain_intensity = (continent_noise + 1.0) * 0.5 * mountain_blend;
-    let height_variation = detail_noise * (15.0 * mountain_blend + mountain_intensity * 40.0);
-    let natural_height = (base_height + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
+    let height_variation = detail_noise
+        * (15.0 * mountain_blend + mountain_intensity * 40.0)
+        * DAMPENING;
 
-    // Blend between forced city height and natural terrain
+    let natural_height = (base_height + height_variation)
+        .clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
+
     let blended = CITY_HEIGHT as f32 * (1.0 - blend_t) + natural_height as f32 * blend_t;
     blended.round() as usize
 }
@@ -119,7 +124,6 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
 
             for y in 0..CHUNK_HEIGHT {
                 let block = if y > height {
-                    // Water level
                     if y <= 28 {
                         BlockType::Water
                     } else {
@@ -129,11 +133,11 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                     if height <= 29 {
                         BlockType::Sand
                     } else if height > 55 {
-                        BlockType::Stone // High mountain peaks
+                        BlockType::Stone
                     } else {
                         BlockType::Grass
                     }
-                } else if y > height - 3 {
+                } else if y > height.saturating_sub(3) {
                     if height <= 29 {
                         BlockType::Sand
                     } else {
@@ -146,9 +150,9 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                 chunk.set_block(x, y, z, block);
             }
 
-            // Trees only on Grass and not too high/low
-            if height > 30 && height < 50 {
-                // Secondary noise for tree placement (Poisson-like)
+            // Trees only on Grass, not too high or low, and outside city zone
+            let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
+            if height > 30 && height < 50 && dist_from_origin > 50.0 {
                 let tree_val = fbm_noise(
                     noise,
                     world_x as f64 * 0.5,
@@ -165,9 +169,6 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
     }
 }
 
-// --- Rest of your functions (generate_chunks, generate_tree, etc.) remain largely the same ---
-// (Ensure they are included in your file below)
-
 fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
@@ -175,7 +176,6 @@ fn generate_chunks(
     registry: Res<BlockRegistry>,
     camera_query: Query<&Transform, With<Camera>>,
 ) {
-    // Wait until block.glb is fully loaded
     if !registry.loaded {
         return;
     }
@@ -207,7 +207,6 @@ fn generate_chunks(
             let mesh = chunk.generate_mesh();
             let mesh_handle = meshes.add(mesh);
 
-            // Use the material straight from block.glb
             let material = registry.material.clone().unwrap();
 
             let entity = commands
@@ -224,7 +223,21 @@ fn generate_chunks(
         }
     }
 
-    // ... despawn out-of-range chunks unchanged ...
+    let chunks_to_remove: Vec<IVec3> = world
+        .chunks
+        .keys()
+        .filter(|&&pos| {
+            (pos.x - camera_chunk.x).abs() > render_distance
+                || (pos.z - camera_chunk.z).abs() > render_distance
+        })
+        .copied()
+        .collect();
+
+    for chunk_pos in chunks_to_remove {
+        if let Some(entity) = world.chunks.remove(&chunk_pos) {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
@@ -248,7 +261,6 @@ fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
                     && leaf_z < CHUNK_SIZE as i32
                 {
                     if dx.abs() + dz.abs() <= 3 {
-                        // Don't replace wood with leaves
                         if chunk.get_block(leaf_x as usize, y + dy, leaf_z as usize)
                             == BlockType::Air
                         {
@@ -279,19 +291,5 @@ fn update_chunk_meshes(
 }
 
 pub fn get_spawn_height(noise: &Perlin) -> f32 {
-    // Returns FEET position = top of surface block
     get_height(noise, 0, 0) as f32 + 1.0
-}
-
-/// Mirrors the surface block logic from generate_terrain so both stay in sync.
-fn get_surface_block(height: usize) -> BlockType {
-    if height <= 28 {
-        BlockType::Water
-    } else if height <= 29 {
-        BlockType::Sand
-    } else if height > 55 {
-        BlockType::Stone
-    } else {
-        BlockType::Grass
-    }
 }
