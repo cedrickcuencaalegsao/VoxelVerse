@@ -1,7 +1,7 @@
+use crate::block::BlockType;
+use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
-use crate::block::BlockType;
-use crate::chunk::{Chunk, CHUNK_SIZE, CHUNK_HEIGHT};
 use std::collections::HashMap;
 
 #[derive(Resource)]
@@ -33,14 +33,21 @@ impl Plugin for WorldPlugin {
 
 // --- NOISE CONFIGURATION ---
 const SEED: u32 = 42;
-const TERRAIN_SCALE: f64 = 0.01;   // How "spread out" the terrain is
-const DAMPENING: f64 = 0.5;       // Overall height multiplier
-const OCTAVES: usize = 7;         // Detail layers
-const PERSISTENCE: f64 = 0.5;     // How much each octave contributes (0.5 = half as much as previous)
-const LACUNARITY: f64 = 2.0;      // How much frequency increases per octave
+const TERRAIN_SCALE: f64 = 0.01; // How "spread out" the terrain is
+const DAMPENING: f64 = 0.5; // Overall height multiplier
+const OCTAVES: usize = 7; // Detail layers
+const PERSISTENCE: f64 = 0.5; // How much each octave contributes (0.5 = half as much as previous)
+const LACUNARITY: f64 = 2.0; // How much frequency increases per octave
 
 /// Calculates multi-octave Perlin noise
-fn fbm_noise(noise: &Perlin, x: f64, z: f64, octaves: usize, persistence: f64, lacunarity: f64) -> f64 {
+fn fbm_noise(
+    noise: &Perlin,
+    x: f64,
+    z: f64,
+    octaves: usize,
+    persistence: f64,
+    lacunarity: f64,
+) -> f64 {
     let mut total = 0.0;
     let mut frequency = 1.0;
     let mut amplitude = 1.0;
@@ -57,26 +64,48 @@ fn fbm_noise(noise: &Perlin, x: f64, z: f64, octaves: usize, persistence: f64, l
 }
 
 fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
+    // --- ORIGIN SAFE ZONE ---
+    // Force a flat grassy platform around 0,0 for the city.
+    // 48 blocks radius = 3 chunks in every direction, fully guaranteed dry land.
+    const CITY_RADIUS: f32 = 48.0;
+    const CITY_HEIGHT: usize = 35; // comfortably above water level (28) and sand (29)
+
+    let dist_from_origin = ((x as f32).powi(2) + (z as f32).powi(2)).sqrt();
+
+    if dist_from_origin < CITY_RADIUS {
+        return CITY_HEIGHT;
+    }
+
+    // Smooth blend from city height into natural terrain
+    const BLEND_RADIUS: f32 = 80.0;
+    let blend_t = if dist_from_origin < BLEND_RADIUS {
+        let t = (dist_from_origin - CITY_RADIUS) / (BLEND_RADIUS - CITY_RADIUS);
+        t * t * (3.0 - 2.0 * t) // smoothstep
+    } else {
+        1.0
+    };
+
+    // ... rest of your existing noise calculation ...
     let x_f = x as f64 * TERRAIN_SCALE;
     let z_f = z as f64 * TERRAIN_SCALE;
 
-    // 1. Continentalness: Large scale variation (plains vs mountains)
+    let dist = ((x as f64).powi(2) + (z as f64).powi(2)).sqrt();
+    const FLAT_RADIUS: f64 = 64.0;
+    const MOUNTAIN_RADIUS: f64 = 256.0;
+    let mt = ((dist - FLAT_RADIUS) / (MOUNTAIN_RADIUS - FLAT_RADIUS)).clamp(0.0, 1.0);
+    let mountain_blend = mt * mt * (3.0 - 2.0 * mt);
+
     let continent_noise = fbm_noise(noise, x_f * 0.5, z_f * 0.5, 3, 0.4, 2.0);
-    
-    // 2. Erosion/Detail: The "mountainous" noise
     let detail_noise = fbm_noise(noise, x_f, z_f, OCTAVES, PERSISTENCE, LACUNARITY);
 
-    // Calculate base height based on continentalness
-    // If continent_noise is high, we have mountains. If low, we have plains.
     let base_height = 30.0;
-    let mountain_intensity = (continent_noise + 1.0) * 0.5; // 0 to 1
-    
-    // Use the mountain intensity to weight how much the detail noise affects height
-    let height_variation = detail_noise * (15.0 + mountain_intensity * 40.0);
-    
-    let final_height = base_height + height_variation;
+    let mountain_intensity = (continent_noise + 1.0) * 0.5 * mountain_blend;
+    let height_variation = detail_noise * (15.0 * mountain_blend + mountain_intensity * 40.0);
+    let natural_height = (base_height + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
 
-    final_height.clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize
+    // Blend between forced city height and natural terrain
+    let blended = CITY_HEIGHT as f32 * (1.0 - blend_t) + natural_height as f32 * blend_t;
+    blended.round() as usize
 }
 
 fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
@@ -90,7 +119,11 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
             for y in 0..CHUNK_HEIGHT {
                 let block = if y > height {
                     // Water level
-                    if y <= 28 { BlockType::Water } else { BlockType::Air }
+                    if y <= 28 {
+                        BlockType::Water
+                    } else {
+                        BlockType::Air
+                    }
                 } else if y == height {
                     if height <= 29 {
                         BlockType::Sand
@@ -115,7 +148,14 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
             // Trees only on Grass and not too high/low
             if height > 30 && height < 50 {
                 // Secondary noise for tree placement (Poisson-like)
-                let tree_val = fbm_noise(noise, world_x as f64 * 0.5, world_z as f64 * 0.5, 2, 0.5, 2.0);
+                let tree_val = fbm_noise(
+                    noise,
+                    world_x as f64 * 0.5,
+                    world_z as f64 * 0.5,
+                    2,
+                    0.5,
+                    2.0,
+                );
                 if tree_val > 0.75 {
                     generate_tree(chunk, x, height + 1, z);
                 }
@@ -161,7 +201,7 @@ fn generate_chunks(
 
             let mesh = chunk.generate_mesh();
             let mesh_handle = meshes.add(mesh);
-            
+
             let material = materials.add(StandardMaterial {
                 base_color: Color::WHITE,
                 perceptual_roughness: 0.8,
@@ -211,14 +251,27 @@ fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
     for dx in -2..=2_i32 {
         for dz in -2..=2_i32 {
             for dy in trunk_height - 1..trunk_height + 2 {
-                if y + dy >= CHUNK_HEIGHT { continue; }
+                if y + dy >= CHUNK_HEIGHT {
+                    continue;
+                }
                 let leaf_x = x as i32 + dx;
                 let leaf_z = z as i32 + dz;
-                if leaf_x >= 0 && leaf_x < CHUNK_SIZE as i32 && leaf_z >= 0 && leaf_z < CHUNK_SIZE as i32 {
+                if leaf_x >= 0
+                    && leaf_x < CHUNK_SIZE as i32
+                    && leaf_z >= 0
+                    && leaf_z < CHUNK_SIZE as i32
+                {
                     if dx.abs() + dz.abs() <= 3 {
                         // Don't replace wood with leaves
-                        if chunk.get_block(leaf_x as usize, y + dy, leaf_z as usize) == BlockType::Air {
-                            chunk.set_block(leaf_x as usize, y + dy, leaf_z as usize, BlockType::Leaves);
+                        if chunk.get_block(leaf_x as usize, y + dy, leaf_z as usize)
+                            == BlockType::Air
+                        {
+                            chunk.set_block(
+                                leaf_x as usize,
+                                y + dy,
+                                leaf_z as usize,
+                                BlockType::Leaves,
+                            );
                         }
                     }
                 }
@@ -236,5 +289,23 @@ fn update_chunk_meshes(
         if let Some(mesh) = meshes.get_mut(mesh_handle) {
             *mesh = new_mesh;
         }
+    }
+}
+
+pub fn get_spawn_height(noise: &Perlin) -> f32 {
+    // Returns FEET position = top of surface block
+    get_height(noise, 0, 0) as f32 + 1.0
+}
+
+/// Mirrors the surface block logic from generate_terrain so both stay in sync.
+fn get_surface_block(height: usize) -> BlockType {
+    if height <= 28 {
+        BlockType::Water
+    } else if height <= 29 {
+        BlockType::Sand
+    } else if height > 55 {
+        BlockType::Stone
+    } else {
+        BlockType::Grass
     }
 }

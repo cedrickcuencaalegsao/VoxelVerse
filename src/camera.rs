@@ -1,6 +1,7 @@
+use crate::physics::{Grounded, Velocity, PLAYER_HEIGHT};
+use crate::world::World as GameWorld;
 use bevy::prelude::*;
 use bevy::window::CursorGrabMode;
-use crate::physics::{Velocity, Grounded};
 
 #[derive(Component)]
 pub struct PlayerCamera {
@@ -43,10 +44,14 @@ impl Plugin for CameraPlugin {
     }
 }
 
-fn setup_camera(mut commands: Commands) {
+fn setup_camera(mut commands: Commands, world: Res<GameWorld>) {
+    let feet_y = crate::world::get_spawn_height(&world.noise);
+    let eye_y = feet_y + PLAYER_HEIGHT;
+
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 80.0, 0.0).looking_at(Vec3::new(10.0, 30.0, 10.0), Vec3::Y),
+            transform: Transform::from_xyz(0.0, eye_y, 0.0)
+                .looking_at(Vec3::new(0.0, eye_y, 10.0), Vec3::Y),
             ..default()
         },
         PlayerCamera::default(),
