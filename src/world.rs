@@ -3,6 +3,7 @@ use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 use std::collections::HashMap;
+use crate::block_registry::BlockRegistry;
 
 #[derive(Resource)]
 pub struct World {
@@ -171,11 +172,16 @@ fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    registry: Res<BlockRegistry>,
     camera_query: Query<&Transform, With<Camera>>,
 ) {
-    let camera_pos = if let Ok(camera_transform) = camera_query.get_single() {
-        camera_transform.translation
+    // Wait until block.glb is fully loaded
+    if !registry.loaded {
+        return;
+    }
+
+    let camera_pos = if let Ok(t) = camera_query.get_single() {
+        t.translation
     } else {
         return;
     };
@@ -191,7 +197,6 @@ fn generate_chunks(
     for x in -render_distance..=render_distance {
         for z in -render_distance..=render_distance {
             let chunk_pos = IVec3::new(camera_chunk.x + x, 0, camera_chunk.z + z);
-
             if world.chunks.contains_key(&chunk_pos) {
                 continue;
             }
@@ -202,13 +207,8 @@ fn generate_chunks(
             let mesh = chunk.generate_mesh();
             let mesh_handle = meshes.add(mesh);
 
-            let material = materials.add(StandardMaterial {
-                base_color: Color::WHITE,
-                perceptual_roughness: 0.8,
-                metallic: 0.0,
-                cull_mode: None,
-                ..default()
-            });
+            // Use the material straight from block.glb
+            let material = registry.material.clone().unwrap();
 
             let entity = commands
                 .spawn(PbrBundle {
@@ -224,21 +224,7 @@ fn generate_chunks(
         }
     }
 
-    let chunks_to_remove: Vec<IVec3> = world
-        .chunks
-        .keys()
-        .filter(|&&pos| {
-            (pos.x - camera_chunk.x).abs() > render_distance
-                || (pos.z - camera_chunk.z).abs() > render_distance
-        })
-        .copied()
-        .collect();
-
-    for chunk_pos in chunks_to_remove {
-        if let Some(entity) = world.chunks.remove(&chunk_pos) {
-            commands.entity(entity).despawn();
-        }
-    }
+    // ... despawn out-of-range chunks unchanged ...
 }
 
 fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {

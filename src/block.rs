@@ -23,34 +23,6 @@ impl BlockType {
         // Water and Leaves allow light/faces to be seen through them
         matches!(self, BlockType::Air | BlockType::Leaves | BlockType::Water)
     }
-
-    pub fn get_color(&self) -> Color {
-        match self {
-            BlockType::Air => Color::NONE,
-            BlockType::Grass => Color::srgb(0.2, 0.8, 0.2),
-            BlockType::Dirt => Color::srgb(0.45, 0.3, 0.15),
-            BlockType::Stone => Color::srgb(0.5, 0.5, 0.5),
-            BlockType::Sand => Color::srgb(0.9, 0.85, 0.6),
-            BlockType::Wood => Color::srgb(0.35, 0.2, 0.1),
-            BlockType::Leaves => Color::srgb(0.1, 0.5, 0.1),
-            BlockType::Water => Color::srgba(0.0, 0.3, 0.8, 0.8), // Deep Blue with some alpha
-        }
-    }
-
-    pub fn get_top_color(&self) -> Color {
-        match self {
-            BlockType::Grass => Color::srgb(0.3, 0.7, 0.3),
-            BlockType::Water => Color::srgb(0.1, 0.4, 0.9), // Slightly lighter surface
-            _ => self.get_color(),
-        }
-    }
-
-    pub fn get_side_color(&self) -> Color {
-        match self {
-            BlockType::Grass => Color::srgb(0.4, 0.5, 0.2),
-            _ => self.get_color(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
