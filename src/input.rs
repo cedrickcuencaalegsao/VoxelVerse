@@ -24,7 +24,6 @@ fn player_movement(
         if keyboard.pressed(KeyCode::KeyA) { horizontal -= right; }
         if keyboard.pressed(KeyCode::KeyD) { horizontal += right; }
 
-        // Sprint on Shift+W, but not when pressing digits (those are POV switches)
         let shift_held = keyboard.pressed(KeyCode::ShiftLeft)
             || keyboard.pressed(KeyCode::ShiftRight);
         let digit_held = keyboard.pressed(KeyCode::Digit1)

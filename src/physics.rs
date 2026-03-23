@@ -12,7 +12,7 @@ pub struct Grounded(pub bool);
 
 const GRAVITY: f32 = -28.0;
 const JUMP_VELOCITY: f32 = 9.0;
-const PLAYER_WIDTH: f32 = 0.35;
+const PLAYER_WIDTH: f32 = 0.3;
 pub const PLAYER_HEIGHT: f32 = 2.5;
 
 pub struct PhysicsPlugin;
@@ -35,8 +35,12 @@ fn is_solid_at(
     let chunk_z = bz.div_euclid(CHUNK_SIZE as i32);
     let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
 
-    let Some(&entity) = world.chunks.get(&chunk_pos) else { return false; };
-    let Ok(chunk) = chunks.get(entity) else { return false; };
+    let Some(&entity) = world.chunks.get(&chunk_pos) else {
+        return false;
+    };
+    let Ok(chunk) = chunks.get(entity) else {
+        return false;
+    };
 
     let lx = bx.rem_euclid(CHUNK_SIZE as i32) as usize;
     let lz = bz.rem_euclid(CHUNK_SIZE as i32) as usize;
@@ -44,11 +48,39 @@ fn is_solid_at(
     block.is_solid() && !matches!(block, BlockType::Water)
 }
 
+/// Check if the player AABB overlaps any solid block.
+/// The AABB is defined by center (x, feet_y..feet_y+PLAYER_HEIGHT, z)
+/// with half-width PLAYER_WIDTH on X and Z.
+fn aabb_overlaps_solid(
+    world: &GameWorld,
+    chunks: &Query<&crate::chunk::Chunk>,
+    x: f32,
+    feet_y: f32,
+    z: f32,
+) -> bool {
+    let min_x = (x - PLAYER_WIDTH + 0.001).floor() as i32;
+    let max_x = (x + PLAYER_WIDTH - 0.001).floor() as i32;
+    let min_y = feet_y.floor() as i32;
+    let max_y = (feet_y + PLAYER_HEIGHT - 0.001).floor() as i32;
+    let min_z = (z - PLAYER_WIDTH + 0.001).floor() as i32;
+    let max_z = (z + PLAYER_WIDTH - 0.001).floor() as i32;
+
+    for bx in min_x..=max_x {
+        for by in min_y..=max_y {
+            for bz in min_z..=max_z {
+                if is_solid_at(world, chunks, bx, by, bz) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn apply_physics(
     time: Res<Time>,
     world: Res<GameWorld>,
     chunks: Query<&crate::chunk::Chunk>,
-    // Player body — drives position, no camera here
     mut query: Query<(&mut Transform, &mut Velocity, &mut Grounded), With<Player>>,
 ) {
     let dt = time.delta_seconds();
@@ -56,20 +88,37 @@ fn apply_physics(
     for (mut transform, mut velocity, mut grounded) in query.iter_mut() {
         velocity.0.y += GRAVITY * dt;
 
-        // transform.translation is the player body / eye position
         let pos = transform.translation;
         let feet_y = pos.y - PLAYER_HEIGHT;
 
+        // --- Y axis ---
+        let desired_feet_y = feet_y + velocity.0.y * dt;
         let new_feet_y = resolve_y(
             &world, &chunks,
-            pos.x, feet_y + velocity.0.y * dt, pos.z,
+            pos.x, desired_feet_y, pos.z,
             &mut velocity.0.y, &mut grounded,
         );
 
-        let new_x = resolve_xz(&world, &chunks, pos.x + velocity.0.x * dt, new_feet_y, pos.z, true);
-        let new_z = resolve_xz(&world, &chunks, new_x, new_feet_y, pos.z + velocity.0.z * dt, false);
+        // --- X axis ---
+        let desired_x = pos.x + velocity.0.x * dt;
+        let new_x = resolve_axis(
+            &world, &chunks,
+            desired_x, new_feet_y, pos.z,
+            pos.x, new_feet_y, pos.z,
+            true,
+            &mut velocity.0.x,
+        );
 
-        // Update player body position — camera reads this in mouse_look
+        // --- Z axis ---
+        let desired_z = pos.z + velocity.0.z * dt;
+        let new_z = resolve_axis(
+            &world, &chunks,
+            new_x, new_feet_y, desired_z,
+            new_x, new_feet_y, pos.z,
+            false,
+            &mut velocity.0.z,
+        );
+
         transform.translation = Vec3::new(new_x, new_feet_y + PLAYER_HEIGHT, new_z);
     }
 }
@@ -88,29 +137,59 @@ fn handle_jump(
 fn resolve_y(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
-    x: f32, new_feet_y: f32, z: f32,
+    x: f32,
+    new_feet_y: f32,
+    z: f32,
     vel_y: &mut f32,
     grounded: &mut Grounded,
 ) -> f32 {
-    let corners = player_corners(x, z);
-
     if *vel_y <= 0.0 {
+        // Moving down — check all corners at foot level
         let foot_block_y = (new_feet_y - 0.001).floor() as i32;
-        for (cx, cz) in &corners {
-            if is_solid_at(world, chunks, *cx, foot_block_y, *cz) {
-                grounded.0 = true;
-                *vel_y = 0.0;
-                return foot_block_y as f32 + 1.0;
+        let min_x = (x - PLAYER_WIDTH + 0.001).floor() as i32;
+        let max_x = (x + PLAYER_WIDTH - 0.001).floor() as i32;
+        let min_z = (z - PLAYER_WIDTH + 0.001).floor() as i32;
+        let max_z = (z + PLAYER_WIDTH - 0.001).floor() as i32;
+
+        let mut hit = false;
+        for bx in min_x..=max_x {
+            for bz in min_z..=max_z {
+                if is_solid_at(world, chunks, bx, foot_block_y, bz) {
+                    hit = true;
+                    break;
+                }
             }
+            if hit { break; }
+        }
+
+        if hit {
+            grounded.0 = true;
+            *vel_y = 0.0;
+            return foot_block_y as f32 + 1.0;
         }
         grounded.0 = false;
     } else {
-        let head_block_y = (new_feet_y + PLAYER_HEIGHT).floor() as i32;
-        for (cx, cz) in &corners {
-            if is_solid_at(world, chunks, *cx, head_block_y, *cz) {
-                *vel_y = 0.0;
-                return head_block_y as f32 - PLAYER_HEIGHT - 0.001;
+        // Moving up — check all corners at head level
+        let head_block_y = (new_feet_y + PLAYER_HEIGHT - 0.001).floor() as i32;
+        let min_x = (x - PLAYER_WIDTH + 0.001).floor() as i32;
+        let max_x = (x + PLAYER_WIDTH - 0.001).floor() as i32;
+        let min_z = (z - PLAYER_WIDTH + 0.001).floor() as i32;
+        let max_z = (z + PLAYER_WIDTH - 0.001).floor() as i32;
+
+        let mut hit = false;
+        for bx in min_x..=max_x {
+            for bz in min_z..=max_z {
+                if is_solid_at(world, chunks, bx, head_block_y, bz) {
+                    hit = true;
+                    break;
+                }
             }
+            if hit { break; }
+        }
+
+        if hit {
+            *vel_y = 0.0;
+            return head_block_y as f32 - PLAYER_HEIGHT;
         }
         grounded.0 = false;
     }
@@ -118,53 +197,29 @@ fn resolve_y(
     new_feet_y
 }
 
-fn resolve_xz(
+/// Generic axis resolver — tries the desired position, falls back to
+/// stepping back 1 unit at a time until no overlap.
+fn resolve_axis(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
-    new_x: f32, feet_y: f32, new_z: f32,
+    // desired full position
+    desired_x: f32, desired_feet_y: f32, desired_z: f32,
+    // safe fallback position (before this axis moved)
+    safe_x: f32, _safe_feet_y: f32, safe_z: f32,
     is_x: bool,
+    vel: &mut f32,
 ) -> f32 {
-    let foot_block_y = feet_y.floor() as i32;
-    let head_block_y = (feet_y + PLAYER_HEIGHT - 0.001).floor() as i32;
-
-    if is_x {
-        let bx = if new_x >= 0.0 {
-            (new_x + PLAYER_WIDTH).floor() as i32
-        } else {
-            (new_x - PLAYER_WIDTH).floor() as i32
-        };
-        for by in foot_block_y..=head_block_y {
-            let bz = new_z.floor() as i32;
-            if is_solid_at(world, chunks, bx, by, bz) {
-                return if new_x >= 0.0 {
-                    bx as f32 - PLAYER_WIDTH - 0.001
-                } else {
-                    bx as f32 + 1.0 + PLAYER_WIDTH + 0.001
-                };
-            }
-        }
-        new_x
-    } else {
-        let bz = if new_z >= 0.0 {
-            (new_z + PLAYER_WIDTH).floor() as i32
-        } else {
-            (new_z - PLAYER_WIDTH).floor() as i32
-        };
-        for by in foot_block_y..=head_block_y {
-            let bx = new_x.floor() as i32;
-            if is_solid_at(world, chunks, bx, by, bz) {
-                return if new_z >= 0.0 {
-                    bz as f32 - PLAYER_WIDTH - 0.001
-                } else {
-                    bz as f32 + 1.0 + PLAYER_WIDTH + 0.001
-                };
-            }
-        }
-        new_z
+    // If desired position has no overlap — accept it
+    if !aabb_overlaps_solid(world, chunks, desired_x, desired_feet_y, desired_z) {
+        return if is_x { desired_x } else { desired_z };
     }
+
+    // Collision — stop velocity and return safe position
+    *vel = 0.0;
+    if is_x { safe_x } else { safe_z }
 }
 
-fn player_corners(x: f32, z: f32) -> [(i32, i32); 4] {
+fn _player_corners(x: f32, z: f32) -> [(i32, i32); 4] {
     [
         ((x - PLAYER_WIDTH).floor() as i32, (z - PLAYER_WIDTH).floor() as i32),
         ((x + PLAYER_WIDTH).floor() as i32, (z - PLAYER_WIDTH).floor() as i32),

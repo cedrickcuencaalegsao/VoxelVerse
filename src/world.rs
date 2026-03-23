@@ -1,6 +1,6 @@
 use crate::block::BlockType;
 use crate::block_registry::BlockRegistry;
-use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
+use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 use std::collections::HashMap;
@@ -20,16 +20,20 @@ impl Default for World {
             .duration_since(UNIX_EPOCH)
             .map(|d| (d.as_millis() & 0xFFFFFFFF) as u32)
             .unwrap_or(42);
-
         info!("World seed: {}", seed);
-
         Self {
             chunks: HashMap::new(),
             noise: Perlin::new(seed),
-            render_distance: 12,
+            render_distance: 4,
             seed,
         }
     }
+}
+
+// Tags each spawned GLB block visual with its world block position
+#[derive(Component)]
+pub struct BlockVisual {
+    pub world_pos: IVec3,
 }
 
 pub struct WorldPlugin;
@@ -37,7 +41,7 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<World>()
-            .add_systems(Update, (generate_chunks, update_chunk_meshes));
+            .add_systems(Update, (generate_chunks, sync_block_visuals));
     }
 }
 
@@ -46,7 +50,6 @@ const DAMPENING: f64 = 0.6;
 const OCTAVES: usize = 7;
 const PERSISTENCE: f64 = 0.5;
 const LACUNARITY: f64 = 2.0;
-const LOD_DISTANCE: i32 = 4;
 
 fn fbm_noise(
     noise: &Perlin,
@@ -60,23 +63,19 @@ fn fbm_noise(
     let mut frequency = 1.0;
     let mut amplitude = 1.0;
     let mut max_value = 0.0;
-
     for _ in 0..octaves {
         total += noise.get([x * frequency, z * frequency]) * amplitude;
         max_value += amplitude;
         amplitude *= persistence;
         frequency *= lacunarity;
     }
-
     total / max_value
 }
 
 fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
     const CITY_RADIUS: f32 = 48.0;
     const CITY_HEIGHT: usize = 35;
-
     let dist_from_origin = ((x as f32).powi(2) + (z as f32).powi(2)).sqrt();
-
     if dist_from_origin < CITY_RADIUS {
         return CITY_HEIGHT;
     }
@@ -91,8 +90,8 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
 
     let x_f = x as f64 * TERRAIN_SCALE;
     let z_f = z as f64 * TERRAIN_SCALE;
-
     let dist = ((x as f64).powi(2) + (z as f64).powi(2)).sqrt();
+
     const FLAT_RADIUS: f64 = 64.0;
     const MOUNTAIN_RADIUS: f64 = 256.0;
     let mt = ((dist - FLAT_RADIUS) / (MOUNTAIN_RADIUS - FLAT_RADIUS)).clamp(0.0, 1.0);
@@ -100,16 +99,12 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
 
     let continent_noise = fbm_noise(noise, x_f * 0.5, z_f * 0.5, 3, 0.4, 2.0);
     let detail_noise = fbm_noise(noise, x_f, z_f, OCTAVES, PERSISTENCE, LACUNARITY);
-
     let base_height = 30.0;
     let mountain_intensity = (continent_noise + 1.0) * 0.5 * mountain_blend;
-    let height_variation = detail_noise
-        * (15.0 * mountain_blend + mountain_intensity * 40.0)
-        * DAMPENING;
-
-    let natural_height = (base_height + height_variation)
-        .clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
-
+    let height_variation =
+        detail_noise * (15.0 * mountain_blend + mountain_intensity * 40.0) * DAMPENING;
+    let natural_height =
+        (base_height + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
     let blended = CITY_HEIGHT as f32 * (1.0 - blend_t) + natural_height as f32 * blend_t;
     blended.round() as usize
 }
@@ -119,7 +114,6 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
         for z in 0..CHUNK_SIZE {
             let world_x = chunk.position.x * CHUNK_SIZE as i32 + x as i32;
             let world_z = chunk.position.z * CHUNK_SIZE as i32 + z as i32;
-
             let height = get_height(noise, world_x, world_z);
 
             for y in 0..CHUNK_HEIGHT {
@@ -146,12 +140,10 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                 } else {
                     BlockType::Stone
                 };
-
                 chunk.set_block(x, y, z, block);
             }
 
-            let dist_from_origin =
-                ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
+            let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
             if height > 30 && height < 50 && dist_from_origin > 50.0 {
                 let tree_val = fbm_noise(
                     noise,
@@ -172,7 +164,7 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
 fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    asset_server: Res<AssetServer>,
     registry: Res<BlockRegistry>,
     camera_query: Query<&Transform, With<Camera>>,
 ) {
@@ -194,37 +186,43 @@ fn generate_chunks(
 
     let render_distance = world.render_distance;
 
-    for x in -render_distance..=render_distance {
-        for z in -render_distance..=render_distance {
-            let chunk_pos = IVec3::new(camera_chunk.x + x, 0, camera_chunk.z + z);
+    for cx in -render_distance..=render_distance {
+        for cz in -render_distance..=render_distance {
+            let chunk_pos = IVec3::new(camera_chunk.x + cx, 0, camera_chunk.z + cz);
             if world.chunks.contains_key(&chunk_pos) {
                 continue;
             }
 
             let mut chunk = Chunk::new(chunk_pos);
             generate_terrain(&mut chunk, &world.noise);
+            let surface_blocks = chunk.get_surface_blocks();
 
-            // Full voxel mesh for nearby chunks, cheap LOD silhouette for far ones
-            let mesh = if x.abs().max(z.abs()) <= LOD_DISTANCE {
-                chunk.generate_mesh()
-            } else {
-                chunk.generate_lod_mesh()
-            };
+            let chunk_entity = commands
+                .spawn((SpatialBundle::default(), chunk))
+                .with_children(|parent| {
+                    for (lx, ly, lz, block_type) in surface_blocks {
+                        let wx = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
+                        let wz = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
+                        let center = Vec3::new(wx as f32 + 0.5, ly as f32 + 0.5, wz as f32 + 0.5);
+                        let (scene_path, y_offset) = block_visual(block_type);
 
-            let mesh_handle = meshes.add(mesh);
-            let material = registry.material.clone().unwrap();
-
-            let entity = commands
-                .spawn(PbrBundle {
-                    mesh: mesh_handle,
-                    material,
-                    transform: Transform::from_translation(Vec3::ZERO),
-                    ..default()
+                        parent.spawn((
+                            SceneBundle {
+                                scene: asset_server.load(scene_path),
+                                transform: Transform::from_translation(
+                                    center + Vec3::new(0.0, y_offset, 0.0),
+                                ),
+                                ..default()
+                            },
+                            BlockVisual {
+                                world_pos: IVec3::new(wx, ly as i32, wz),
+                            },
+                        ));
+                    }
                 })
-                .insert(chunk)
                 .id();
 
-            world.chunks.insert(chunk_pos, entity);
+            world.chunks.insert(chunk_pos, chunk_entity);
         }
     }
 
@@ -240,8 +238,53 @@ fn generate_chunks(
 
     for chunk_pos in chunks_to_remove {
         if let Some(entity) = world.chunks.remove(&chunk_pos) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).despawn_recursive();
         }
+    }
+}
+
+/// Every frame check all block visuals — if the block data is now Air, despawn the GLB.
+fn sync_block_visuals(
+    mut commands: Commands,
+    world: Res<World>,
+    chunks: Query<&Chunk>,
+    visuals: Query<(Entity, &BlockVisual)>,
+) {
+    for (entity, visual) in visuals.iter() {
+        let bx = visual.world_pos.x;
+        let by = visual.world_pos.y;
+        let bz = visual.world_pos.z;
+
+        let chunk_x = bx.div_euclid(CHUNK_SIZE as i32);
+        let chunk_z = bz.div_euclid(CHUNK_SIZE as i32);
+        let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
+
+        let Some(&chunk_entity) = world.chunks.get(&chunk_pos) else {
+            continue;
+        };
+        let Ok(chunk) = chunks.get(chunk_entity) else {
+            continue;
+        };
+
+        let lx = bx.rem_euclid(CHUNK_SIZE as i32) as usize;
+        let lz = bz.rem_euclid(CHUNK_SIZE as i32) as usize;
+
+        if chunk.get_block(lx, by as usize, lz as usize) == BlockType::Air {
+            commands.entity(entity).despawn_recursive();
+        }
+    }
+}
+
+fn block_visual(block: BlockType) -> (&'static str, f32) {
+    match block {
+        BlockType::Grass => ("block.glb#Scene0", 0.0),
+        BlockType::Dirt => ("soil.glb#Scene0", 0.0),
+        BlockType::Stone => ("soil.glb#Scene0", 0.0),
+        BlockType::Sand => ("sand.glb#Scene0", 0.0),
+        BlockType::Wood => ("block.glb#Scene0", 0.0),
+        BlockType::Leaves => ("block.glb#Scene0", 0.0),
+        BlockType::Water => ("water.glb#Scene0", 0.0),
+        BlockType::Air => ("block.glb#Scene0", 0.0),
     }
 }
 
@@ -283,18 +326,6 @@ fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
     }
 }
 
-fn update_chunk_meshes(
-    mut chunks: Query<(&Chunk, &Handle<Mesh>), Changed<Chunk>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    for (chunk, mesh_handle) in chunks.iter_mut() {
-        let new_mesh = chunk.generate_mesh();
-        if let Some(mesh) = meshes.get_mut(mesh_handle) {
-            *mesh = new_mesh;
-        }
-    }
-}
-
 pub fn get_spawn_height(noise: &Perlin) -> f32 {
-    get_height(noise, 0, 0) as f32 + 1.0
+    get_height(noise, 0, 0) as f32 + 2.0
 }
