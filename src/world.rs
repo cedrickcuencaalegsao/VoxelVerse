@@ -1,6 +1,6 @@
 use crate::block::BlockType;
 use crate::block_registry::BlockRegistry;
-use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
+use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 use std::collections::HashMap;
@@ -20,9 +20,7 @@ impl Default for World {
             .duration_since(UNIX_EPOCH)
             .map(|d| (d.as_millis() & 0xFFFFFFFF) as u32)
             .unwrap_or(42);
-
         info!("World seed: {}", seed);
-
         Self {
             chunks: HashMap::new(),
             noise: Perlin::new(seed),
@@ -32,12 +30,18 @@ impl Default for World {
     }
 }
 
+// Tags each spawned GLB block visual with its world block position
+#[derive(Component)]
+pub struct BlockVisual {
+    pub world_pos: IVec3,
+}
+
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<World>()
-            .add_systems(Update, generate_chunks);
+            .add_systems(Update, (generate_chunks, sync_block_visuals));
     }
 }
 
@@ -71,7 +75,6 @@ fn fbm_noise(
 fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
     const CITY_RADIUS: f32 = 48.0;
     const CITY_HEIGHT: usize = 35;
-
     let dist_from_origin = ((x as f32).powi(2) + (z as f32).powi(2)).sqrt();
     if dist_from_origin < CITY_RADIUS {
         return CITY_HEIGHT;
@@ -96,16 +99,12 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
 
     let continent_noise = fbm_noise(noise, x_f * 0.5, z_f * 0.5, 3, 0.4, 2.0);
     let detail_noise = fbm_noise(noise, x_f, z_f, OCTAVES, PERSISTENCE, LACUNARITY);
-
     let base_height = 30.0;
     let mountain_intensity = (continent_noise + 1.0) * 0.5 * mountain_blend;
-    let height_variation = detail_noise
-        * (15.0 * mountain_blend + mountain_intensity * 40.0)
-        * DAMPENING;
-
-    let natural_height = (base_height + height_variation)
-        .clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
-
+    let height_variation =
+        detail_noise * (15.0 * mountain_blend + mountain_intensity * 40.0) * DAMPENING;
+    let natural_height =
+        (base_height + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
     let blended = CITY_HEIGHT as f32 * (1.0 - blend_t) + natural_height as f32 * blend_t;
     blended.round() as usize
 }
@@ -119,27 +118,40 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
 
             for y in 0..CHUNK_HEIGHT {
                 let block = if y > height {
-                    if y <= 28 { BlockType::Water } else { BlockType::Air }
+                    if y <= 28 {
+                        BlockType::Water
+                    } else {
+                        BlockType::Air
+                    }
                 } else if y == height {
-                    if height <= 29 { BlockType::Sand }
-                    else if height > 55 { BlockType::Stone }
-                    else { BlockType::Grass }
+                    if height <= 29 {
+                        BlockType::Sand
+                    } else if height > 55 {
+                        BlockType::Stone
+                    } else {
+                        BlockType::Grass
+                    }
                 } else if y > height.saturating_sub(3) {
-                    if height <= 29 { BlockType::Sand } else { BlockType::Dirt }
+                    if height <= 29 {
+                        BlockType::Sand
+                    } else {
+                        BlockType::Dirt
+                    }
                 } else {
                     BlockType::Stone
                 };
                 chunk.set_block(x, y, z, block);
             }
 
-            let dist_from_origin =
-                ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
+            let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
             if height > 30 && height < 50 && dist_from_origin > 50.0 {
                 let tree_val = fbm_noise(
                     noise,
                     world_x as f64 * 0.5,
                     world_z as f64 * 0.5,
-                    2, 0.5, 2.0,
+                    2,
+                    0.5,
+                    2.0,
                 );
                 if tree_val > 0.75 {
                     generate_tree(chunk, x, height + 1, z);
@@ -186,30 +198,26 @@ fn generate_chunks(
             let surface_blocks = chunk.get_surface_blocks();
 
             let chunk_entity = commands
-                .spawn((
-                    SpatialBundle::default(),
-                    chunk,
-                ))
+                .spawn((SpatialBundle::default(), chunk))
                 .with_children(|parent| {
                     for (lx, ly, lz, block_type) in surface_blocks {
-                        let wx = (chunk_pos.x * CHUNK_SIZE as i32 + lx as i32) as f32;
-                        let wy = ly as f32;
-                        let wz = (chunk_pos.z * CHUNK_SIZE as i32 + lz as i32) as f32;
-
-                        // Each block occupies exactly [wx, wx+1] x [wy, wy+1] x [wz, wz+1]
-                        // The GLB is centered at wx+0.5, wy+0.5, wz+0.5
-                        // so the visual sits perfectly inside the 1x1x1 hitbox
-                        let center = Vec3::new(wx + 0.5, wy + 0.5, wz + 0.5);
-
+                        let wx = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
+                        let wz = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
+                        let center = Vec3::new(wx as f32 + 0.5, ly as f32 + 0.5, wz as f32 + 0.5);
                         let (scene_path, y_offset) = block_visual(block_type);
 
-                        parent.spawn(SceneBundle {
-                            scene: asset_server.load(scene_path),
-                            transform: Transform::from_translation(
-                                center + Vec3::new(0.0, y_offset, 0.0)
-                            ),
-                            ..default()
-                        });
+                        parent.spawn((
+                            SceneBundle {
+                                scene: asset_server.load(scene_path),
+                                transform: Transform::from_translation(
+                                    center + Vec3::new(0.0, y_offset, 0.0),
+                                ),
+                                ..default()
+                            },
+                            BlockVisual {
+                                world_pos: IVec3::new(wx, ly as i32, wz),
+                            },
+                        ));
                     }
                 })
                 .id();
@@ -235,19 +243,48 @@ fn generate_chunks(
     }
 }
 
-/// Returns (scene_path, y_offset).
-/// y_offset nudges the GLB up or down so it sits flush in the 1x1x1 cell.
-/// Grass uses block.glb (top layer), subsurface uses soil.glb.
+/// Every frame check all block visuals — if the block data is now Air, despawn the GLB.
+fn sync_block_visuals(
+    mut commands: Commands,
+    world: Res<World>,
+    chunks: Query<&Chunk>,
+    visuals: Query<(Entity, &BlockVisual)>,
+) {
+    for (entity, visual) in visuals.iter() {
+        let bx = visual.world_pos.x;
+        let by = visual.world_pos.y;
+        let bz = visual.world_pos.z;
+
+        let chunk_x = bx.div_euclid(CHUNK_SIZE as i32);
+        let chunk_z = bz.div_euclid(CHUNK_SIZE as i32);
+        let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
+
+        let Some(&chunk_entity) = world.chunks.get(&chunk_pos) else {
+            continue;
+        };
+        let Ok(chunk) = chunks.get(chunk_entity) else {
+            continue;
+        };
+
+        let lx = bx.rem_euclid(CHUNK_SIZE as i32) as usize;
+        let lz = bz.rem_euclid(CHUNK_SIZE as i32) as usize;
+
+        if chunk.get_block(lx, by as usize, lz as usize) == BlockType::Air {
+            commands.entity(entity).despawn_recursive();
+        }
+    }
+}
+
 fn block_visual(block: BlockType) -> (&'static str, f32) {
     match block {
-        BlockType::Grass  => ("block.glb#Scene0", 0.0),
-        BlockType::Dirt   => ("soil.glb#Scene0",  0.0),
-        BlockType::Stone  => ("soil.glb#Scene0",  0.0),
-        BlockType::Sand   => ("block.glb#Scene0", 0.0),
-        BlockType::Wood   => ("block.glb#Scene0", 0.0),
-        BlockType::Leaves => ("block.glb#Scene0", 0.0),
-        BlockType::Water  => ("block.glb#Scene0", 0.0),
-        BlockType::Air    => ("block.glb#Scene0", 0.0),
+        BlockType::Grass => ("block.glb#Scene0", 0.0),
+        BlockType::Dirt => ("soil.glb#Scene0", 0.0),
+        BlockType::Stone => ("soil.glb#Scene0", 0.0),
+        BlockType::Sand => ("soil.glb#Scene0", 0.0),
+        BlockType::Wood => ("soil.glb#Scene0", 0.0),
+        BlockType::Leaves => ("soil.glb#Scene0", 0.0),
+        BlockType::Water => ("soil.glb#Scene0", 0.0),
+        BlockType::Air => ("soil.glb#Scene0", 0.0),
     }
 }
 
@@ -261,18 +298,24 @@ fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
     for dx in -2..=2_i32 {
         for dz in -2..=2_i32 {
             for dy in trunk_height - 1..trunk_height + 2 {
-                if y + dy >= CHUNK_HEIGHT { continue; }
+                if y + dy >= CHUNK_HEIGHT {
+                    continue;
+                }
                 let leaf_x = x as i32 + dx;
                 let leaf_z = z as i32 + dz;
-                if leaf_x >= 0 && leaf_x < CHUNK_SIZE as i32
-                    && leaf_z >= 0 && leaf_z < CHUNK_SIZE as i32
+                if leaf_x >= 0
+                    && leaf_x < CHUNK_SIZE as i32
+                    && leaf_z >= 0
+                    && leaf_z < CHUNK_SIZE as i32
                 {
                     if dx.abs() + dz.abs() <= 3 {
                         if chunk.get_block(leaf_x as usize, y + dy, leaf_z as usize)
                             == BlockType::Air
                         {
                             chunk.set_block(
-                                leaf_x as usize, y + dy, leaf_z as usize,
+                                leaf_x as usize,
+                                y + dy,
+                                leaf_z as usize,
                                 BlockType::Leaves,
                             );
                         }

@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use crate::block::BlockType;
+use bevy::prelude::*;
 
 pub const CHUNK_SIZE: usize = 16;
 pub const CHUNK_HEIGHT: usize = 64;
@@ -35,6 +35,8 @@ impl Chunk {
         let mut surface = Vec::new();
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
+                // Find the topmost solid non-water block
+                let mut top_y = None;
                 for y in (0..CHUNK_HEIGHT).rev() {
                     let block = self.get_block(x, y, z);
                     if block.is_solid() && !matches!(block, BlockType::Water) {
@@ -44,20 +46,25 @@ impl Chunk {
                             BlockType::Air
                         };
                         if above.is_transparent() {
-                            // Top surface block
-                            surface.push((x, y, z, block));
-
-                            // 2 blocks below the surface
-                            for depth in 1..=2 {
-                                if y >= depth {
-                                    let below = self.get_block(x, y - depth, z);
-                                    if below.is_solid() {
-                                        surface.push((x, y - depth, z, below));
-                                    }
-                                }
-                            }
+                            top_y = Some(y);
+                            break;
                         }
-                        break;
+                    }
+                }
+
+                let Some(ty) = top_y else { continue };
+
+                // Top surface block
+                surface.push((x, ty, z, self.get_block(x, ty, z)));
+
+                // Subsurface blocks — always use the actual block type at that depth
+                for depth in 1..=2usize {
+                    if ty >= depth {
+                        let by = ty - depth;
+                        let b = self.get_block(x, by, z);
+                        if b.is_solid() && !matches!(b, BlockType::Water) {
+                            surface.push((x, by, z, b));
+                        }
                     }
                 }
             }
