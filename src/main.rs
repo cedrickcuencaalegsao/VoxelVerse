@@ -4,6 +4,7 @@ mod block;
 mod block_registry;
 mod camera;
 mod chunk;
+mod fire;
 mod input;
 mod physics;
 mod world;
@@ -11,6 +12,7 @@ mod world;
 use block_registry::{BlockRegistry, BlockRegistryPlugin};
 use camera::CameraPlugin;
 use chunk::ChunkPlugin;
+use fire::FirePlugin;
 use input::InputPlugin;
 use physics::PhysicsPlugin;
 use world::WorldPlugin;
@@ -32,6 +34,7 @@ fn main() {
             InputPlugin,
             PhysicsPlugin,
             BlockRegistryPlugin,
+            FirePlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
         .add_systems(Startup, setup)
@@ -39,10 +42,7 @@ fn main() {
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let gltf_handle = asset_server.load("block.glb");
     commands.insert_resource(BlockRegistry::new(gltf_handle));
 
@@ -52,16 +52,12 @@ fn setup(
             shadows_enabled: true,
             ..default()
         },
-        transform: Transform::from_xyz(50.0, 100.0, 50.0)
-            .looking_at(Vec3::ZERO, Vec3::Y),
+        transform: Transform::from_xyz(50.0, 100.0, 50.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
 
-fn set_window_title(
-    world: Res<crate::world::World>,
-    mut windows: Query<&mut Window>,
-) {
+fn set_window_title(world: Res<crate::world::World>, mut windows: Query<&mut Window>) {
     if let Ok(mut window) = windows.get_single_mut() {
         window.title = format!("VoxelVerse — seed: {}", world.seed);
     }

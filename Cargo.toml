@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bevy = { version = "0.14", features = ["bevy_gltf"] }
+bevy_gltf_kun = "0.3.0"
 noise = "0.9"
 rand = "0.8"
 
