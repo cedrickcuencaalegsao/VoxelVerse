@@ -35,21 +35,18 @@ fn extract_block_assets(
         return;
     }
 
-    let Some(gltf) = gltf_assets.get(&registry.gltf_handle) else {
+    let Some(_gltf) = gltf_assets.get(&registry.gltf_handle) else {
         return;
     };
 
-    // Pull material from GLB, or create a default white one
-    if let Some(mat_handle) = gltf.materials.first() {
-        registry.material = Some(mat_handle.clone());
-    } else {
-        registry.material = Some(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.8,
-            ..default()
-        }));
-    }
+    registry.material = Some(materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        perceptual_roughness: 0.85,
+        reflectance: 0.3,
+        unlit: false,
+        ..default()
+    }));
 
     registry.loaded = true;
-    info!("BlockRegistry loaded from block.glb");
+    info!("BlockRegistry loaded — vertex colors enabled");
 }

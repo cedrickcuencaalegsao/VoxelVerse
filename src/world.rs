@@ -26,7 +26,7 @@ impl Default for World {
         Self {
             chunks: HashMap::new(),
             noise: Perlin::new(seed),
-            render_distance: 12,
+            render_distance: 4, // keep low — we're spawning real models now
             seed,
         }
     }
@@ -37,11 +37,10 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<World>()
-            .add_systems(Update, (generate_chunks, update_chunk_meshes));
+            .add_systems(Update, generate_chunks);
     }
 }
 
-// --- NOISE CONFIGURATION ---
 const TERRAIN_SCALE: f64 = 0.01;
 const DAMPENING: f64 = 0.6;
 const OCTAVES: usize = 7;
@@ -119,30 +118,17 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
         for z in 0..CHUNK_SIZE {
             let world_x = chunk.position.x * CHUNK_SIZE as i32 + x as i32;
             let world_z = chunk.position.z * CHUNK_SIZE as i32 + z as i32;
-
             let height = get_height(noise, world_x, world_z);
 
             for y in 0..CHUNK_HEIGHT {
                 let block = if y > height {
-                    if y <= 28 {
-                        BlockType::Water
-                    } else {
-                        BlockType::Air
-                    }
+                    if y <= 28 { BlockType::Water } else { BlockType::Air }
                 } else if y == height {
-                    if height <= 29 {
-                        BlockType::Sand
-                    } else if height > 55 {
-                        BlockType::Stone
-                    } else {
-                        BlockType::Grass
-                    }
+                    if height <= 29 { BlockType::Sand }
+                    else if height > 55 { BlockType::Stone }
+                    else { BlockType::Grass }
                 } else if y > height.saturating_sub(3) {
-                    if height <= 29 {
-                        BlockType::Sand
-                    } else {
-                        BlockType::Dirt
-                    }
+                    if height <= 29 { BlockType::Sand } else { BlockType::Dirt }
                 } else {
                     BlockType::Stone
                 };
@@ -150,16 +136,14 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                 chunk.set_block(x, y, z, block);
             }
 
-            // Trees only on Grass, not too high or low, and outside city zone
-            let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
+            let dist_from_origin =
+                ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
             if height > 30 && height < 50 && dist_from_origin > 50.0 {
                 let tree_val = fbm_noise(
                     noise,
                     world_x as f64 * 0.5,
                     world_z as f64 * 0.5,
-                    2,
-                    0.5,
-                    2.0,
+                    2, 0.5, 2.0,
                 );
                 if tree_val > 0.75 {
                     generate_tree(chunk, x, height + 1, z);
@@ -172,9 +156,9 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
 fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    registry: Res<BlockRegistry>,
+    asset_server: Res<AssetServer>,
     camera_query: Query<&Transform, With<Camera>>,
+    registry: Res<BlockRegistry>,
 ) {
     if !registry.loaded {
         return;
@@ -194,9 +178,9 @@ fn generate_chunks(
 
     let render_distance = world.render_distance;
 
-    for x in -render_distance..=render_distance {
-        for z in -render_distance..=render_distance {
-            let chunk_pos = IVec3::new(camera_chunk.x + x, 0, camera_chunk.z + z);
+    for cx in -render_distance..=render_distance {
+        for cz in -render_distance..=render_distance {
+            let chunk_pos = IVec3::new(camera_chunk.x + cx, 0, camera_chunk.z + cz);
             if world.chunks.contains_key(&chunk_pos) {
                 continue;
             }
@@ -204,25 +188,40 @@ fn generate_chunks(
             let mut chunk = Chunk::new(chunk_pos);
             generate_terrain(&mut chunk, &world.noise);
 
-            let mesh = chunk.generate_mesh();
-            let mesh_handle = meshes.add(mesh);
+            let surface_blocks = chunk.get_surface_blocks();
 
-            let material = registry.material.clone().unwrap();
+            // Spawn a parent entity to hold all block instances for this chunk
+            let chunk_entity = commands
+                .spawn((
+                    SpatialBundle::default(),
+                    chunk,
+                ))
+                .with_children(|parent| {
+                    for (lx, ly, lz, block_type) in surface_blocks {
+                        let world_x = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
+                        let world_z = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
 
-            let entity = commands
-                .spawn(PbrBundle {
-                    mesh: mesh_handle,
-                    material,
-                    transform: Transform::from_translation(Vec3::ZERO),
-                    ..default()
+                        // Pick the right GLB scene based on block type
+                        let scene_path = block_scene_path(block_type);
+
+                        parent.spawn(SceneBundle {
+                            scene: asset_server.load(scene_path),
+                            transform: Transform::from_xyz(
+                                world_x as f32,
+                                ly as f32,
+                                world_z as f32,
+                            ),
+                            ..default()
+                        });
+                    }
                 })
-                .insert(chunk)
                 .id();
 
-            world.chunks.insert(chunk_pos, entity);
+            world.chunks.insert(chunk_pos, chunk_entity);
         }
     }
 
+    // Despawn out-of-range chunks
     let chunks_to_remove: Vec<IVec3> = world
         .chunks
         .keys()
@@ -235,8 +234,22 @@ fn generate_chunks(
 
     for chunk_pos in chunks_to_remove {
         if let Some(entity) = world.chunks.remove(&chunk_pos) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).despawn_recursive();
         }
+    }
+}
+
+/// Map block type to GLB scene path.
+/// Right now all blocks use block.glb — you can add more GLBs later.
+fn block_scene_path(block: BlockType) -> &'static str {
+    match block {
+        BlockType::Grass | BlockType::Dirt => "block.glb#Scene0",
+        BlockType::Stone => "block.glb#Scene0",
+        BlockType::Sand  => "block.glb#Scene0",
+        BlockType::Wood  => "block.glb#Scene0",
+        BlockType::Leaves => "block.glb#Scene0",
+        BlockType::Water => "block.glb#Scene0",
+        BlockType::Air   => "block.glb#Scene0",
     }
 }
 
@@ -250,42 +263,24 @@ fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
     for dx in -2..=2_i32 {
         for dz in -2..=2_i32 {
             for dy in trunk_height - 1..trunk_height + 2 {
-                if y + dy >= CHUNK_HEIGHT {
-                    continue;
-                }
+                if y + dy >= CHUNK_HEIGHT { continue; }
                 let leaf_x = x as i32 + dx;
                 let leaf_z = z as i32 + dz;
-                if leaf_x >= 0
-                    && leaf_x < CHUNK_SIZE as i32
-                    && leaf_z >= 0
-                    && leaf_z < CHUNK_SIZE as i32
+                if leaf_x >= 0 && leaf_x < CHUNK_SIZE as i32
+                    && leaf_z >= 0 && leaf_z < CHUNK_SIZE as i32
                 {
                     if dx.abs() + dz.abs() <= 3 {
                         if chunk.get_block(leaf_x as usize, y + dy, leaf_z as usize)
                             == BlockType::Air
                         {
                             chunk.set_block(
-                                leaf_x as usize,
-                                y + dy,
-                                leaf_z as usize,
+                                leaf_x as usize, y + dy, leaf_z as usize,
                                 BlockType::Leaves,
                             );
                         }
                     }
                 }
             }
-        }
-    }
-}
-
-fn update_chunk_meshes(
-    mut chunks: Query<(&Chunk, &Handle<Mesh>), Changed<Chunk>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    for (chunk, mesh_handle) in chunks.iter_mut() {
-        let new_mesh = chunk.generate_mesh();
-        if let Some(mesh) = meshes.get_mut(mesh_handle) {
-            *mesh = new_mesh;
         }
     }
 }

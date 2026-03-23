@@ -37,7 +37,6 @@ fn main() {
             FirePlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
-        .add_systems(Startup, setup)
         .add_systems(Startup, (setup, set_window_title))
         .run();
 }
@@ -48,16 +47,21 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
-            illuminance: 10000.0,
+            illuminance: 8000.0,
             shadows_enabled: true,
             ..default()
         },
-        transform: Transform::from_xyz(50.0, 100.0, 50.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // Angled sun so each face gets different brightness — gives depth
+        transform: Transform::from_xyz(1.0, 2.0, 1.0)
+            .looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
 
-fn set_window_title(world: Res<crate::world::World>, mut windows: Query<&mut Window>) {
+fn set_window_title(
+    world: Res<crate::world::World>,
+    mut windows: Query<&mut Window>,
+) {
     if let Ok(mut window) = windows.get_single_mut() {
         window.title = format!("VoxelVerse — seed: {}", world.seed);
     }

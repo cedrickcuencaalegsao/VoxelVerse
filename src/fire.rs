@@ -223,7 +223,7 @@ fn update_fire_cubes(
             continue;
         }
 
-        let t = particle.age / particle.lifetime;
+        let _t = particle.age / particle.lifetime;
 
         transform.translation += particle.velocity * dt;
 
