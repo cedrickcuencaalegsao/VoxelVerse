@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use crate::camera::{Player, PlayerCamera};
 use crate::physics::PLAYER_HEIGHT;
 use crate::world::World as GameWorld;
@@ -10,6 +11,9 @@ pub struct CoordText;
 
 #[derive(Component)]
 pub struct Crosshair;
+
+#[derive(Component)]
+pub struct StatsText;
 
 #[derive(Component)]
 #[allow(dead_code)]
@@ -30,9 +34,9 @@ pub struct MinimapContainer;
 #[derive(Resource)]
 pub struct MinimapState {
     pub expanded: bool,
-    pub dirty: bool,              // needs full redraw
-    pub last_player_pos: Vec2,    // last position when we drew
-    pub frame_counter: u32,       // throttle counter
+    pub dirty: bool,
+    pub last_player_pos: Vec2,
+    pub frame_counter: u32,
 }
 
 impl Default for MinimapState {
@@ -46,11 +50,8 @@ impl Default for MinimapState {
     }
 }
 
-// Minimap redraws only when player moves more than this many blocks
 const REDRAW_THRESHOLD: f32 = 2.0;
-// Only redraw terrain every N frames max
 const REDRAW_EVERY_FRAMES: u32 = 6;
-
 const MAP_SIZE_SMALL: f32 = 160.0;
 const MAP_SIZE_LARGE: f32 = 380.0;
 const MAP_RADIUS_SMALL: i32 = 24;
@@ -62,18 +63,18 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MinimapState>()
-            .add_systems(Startup, (setup_hud, setup_crosshair, setup_minimap))
+        app.add_plugins(FrameTimeDiagnosticsPlugin)
+            .init_resource::<MinimapState>()
+            .add_systems(Startup, (setup_hud, setup_crosshair, setup_minimap, setup_stats))
             .add_systems(Update, (
                 update_coords,
+                update_stats,
                 toggle_minimap,
-                update_minimap_terrain,  // expensive — throttled
-                update_minimap_overlay,  // cheap — runs every frame (arrow + labels)
+                update_minimap_terrain,
+                update_minimap_overlay,
             ));
     }
 }
-
-// --- CROSSHAIR ---
 
 fn setup_crosshair(mut commands: Commands) {
     commands
@@ -140,8 +141,6 @@ fn setup_crosshair(mut commands: Commands) {
         });
 }
 
-// --- COORD HUD ---
-
 fn setup_hud(mut commands: Commands) {
     commands
         .spawn(NodeBundle {
@@ -196,7 +195,85 @@ fn snap_coord(v: f32) -> f32 {
     if (v - rounded).abs() < 0.05 { rounded.floor() } else { v.floor() }
 }
 
-// --- MINIMAP SETUP ---
+fn setup_stats(mut commands: Commands) {
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(10.0),
+                left: Val::Px(10.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(2.0),
+                ..default()
+            },
+            background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn((
+                TextBundle::from_section(
+                    "FPS: --",
+                    TextStyle {
+                        font_size: 14.0,
+                        color: Color::srgb(0.4, 1.0, 0.4),
+                        ..default()
+                    },
+                ),
+                StatsText,
+            ));
+        });
+}
+
+fn update_stats(
+    mut text_query: Query<&mut Text, With<StatsText>>,
+    diagnostics: Res<DiagnosticsStore>,
+    world: Res<GameWorld>,
+    all_entities: Query<Entity>,
+) {
+    let Ok(mut text) = text_query.get_single_mut() else { return };
+
+    // FPS
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+
+    // Frame time in ms
+    let frame_ms = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0)
+        * 1000.0;
+
+    // Entity count
+    let entity_count = all_entities.iter().count();
+
+    // Chunk count
+    let chunk_count = world.chunks.len();
+
+    // Approximate visible blocks (surface only, 3 layers)
+    let visible_blocks = chunk_count * 16 * 16 * 3;
+
+    // FPS color — green good, yellow ok, red bad
+    let fps_color = if fps >= 55.0 {
+        Color::srgb(0.3, 1.0, 0.3)
+    } else if fps >= 30.0 {
+        Color::srgb(1.0, 0.85, 0.0)
+    } else {
+        Color::srgb(1.0, 0.3, 0.3)
+    };
+
+    text.sections[0].style.color = fps_color;
+    text.sections[0].value = format!(
+        "FPS:     {:.0}  ({:.1}ms)\nEntities: {}\nChunks:  {}\nBlocks:  ~{}",
+        fps,
+        frame_ms,
+        entity_count,
+        chunk_count,
+        visible_blocks,
+    );
+}
 
 fn setup_minimap(mut commands: Commands) {
     commands.spawn((
@@ -226,7 +303,7 @@ fn toggle_minimap(
 ) {
     if keyboard.just_pressed(KeyCode::KeyM) {
         state.expanded = !state.expanded;
-        state.dirty = true; // force terrain redraw on size change
+        state.dirty = true;
         if let Ok(mut style) = container_query.get_single_mut() {
             let size = if state.expanded { MAP_SIZE_LARGE } else { MAP_SIZE_SMALL };
             style.width = Val::Px(size);
@@ -234,8 +311,6 @@ fn toggle_minimap(
         }
     }
 }
-
-// --- TERRAIN DOTS — throttled, only redraws when player moves or map toggles ---
 
 #[derive(Component)]
 pub struct MinimapTerrainDot;
@@ -255,7 +330,6 @@ fn update_minimap_terrain(
     let eye = player_transform.translation;
     let current_pos = Vec2::new(eye.x, eye.z);
 
-    // Throttle: skip if player hasn't moved enough and not dirty
     state.frame_counter += 1;
     let moved_enough = current_pos.distance(state.last_player_pos) > REDRAW_THRESHOLD;
     let frame_ok = state.frame_counter >= REDRAW_EVERY_FRAMES;
@@ -264,26 +338,24 @@ fn update_minimap_terrain(
         return;
     }
 
-    // Reset counters
     state.frame_counter = 0;
     if moved_enough || state.dirty {
         state.last_player_pos = current_pos;
         state.dirty = false;
     }
 
-    // Despawn old terrain dots
     for entity in dot_query.iter() {
         commands.entity(entity).despawn();
     }
 
-    let map_size = if state.expanded { MAP_SIZE_LARGE } else { MAP_SIZE_SMALL };
-    let map_radius = if state.expanded { MAP_RADIUS_LARGE } else { MAP_RADIUS_SMALL };
-    let dot_size = if state.expanded { DOT_SIZE_LARGE } else { DOT_SIZE_SMALL };
+    let map_size   = if state.expanded { MAP_SIZE_LARGE   } else { MAP_SIZE_SMALL   };
+    let map_radius = if state.expanded { MAP_RADIUS_LARGE  } else { MAP_RADIUS_SMALL  };
+    let dot_size   = if state.expanded { DOT_SIZE_LARGE   } else { DOT_SIZE_SMALL   };
 
-    let win_w = window.width();
+    let win_w    = window.width();
     let map_left = win_w - map_size - 10.0;
-    let map_top = 10.0;
-    let scale = map_size / (map_radius as f32 * 2.0);
+    let map_top  = 10.0;
+    let scale    = map_size / (map_radius as f32 * 2.0);
     let px = eye.x;
     let pz = eye.z;
 
@@ -292,8 +364,8 @@ fn update_minimap_terrain(
             let wx = (px + dx as f32).floor() as i32;
             let wz = (pz + dz as f32).floor() as i32;
 
-            let chunk_x = wx.div_euclid(CHUNK_SIZE as i32);
-            let chunk_z = wz.div_euclid(CHUNK_SIZE as i32);
+            let chunk_x   = wx.div_euclid(CHUNK_SIZE as i32);
+            let chunk_z   = wz.div_euclid(CHUNK_SIZE as i32);
             let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
 
             let Some(&chunk_entity) = world.chunks.get(&chunk_pos) else { continue };
@@ -314,15 +386,15 @@ fn update_minimap_terrain(
             if matches!(top_block, BlockType::Air) { continue; }
 
             let dot_color = minimap_color(top_block);
-            let screen_x = map_left + (dx + map_radius) as f32 * scale;
-            let screen_y = map_top  + (dz + map_radius) as f32 * scale;
+            let screen_x  = map_left + (dx + map_radius) as f32 * scale;
+            let screen_y  = map_top  + (dz + map_radius) as f32 * scale;
 
             commands.spawn((
                 NodeBundle {
                     style: Style {
                         position_type: PositionType::Absolute,
-                        left: Val::Px(screen_x),
-                        top:  Val::Px(screen_y),
+                        left:   Val::Px(screen_x),
+                        top:    Val::Px(screen_y),
                         width:  Val::Px(dot_size),
                         height: Val::Px(dot_size),
                         ..default()
@@ -337,8 +409,6 @@ fn update_minimap_terrain(
     }
 }
 
-// --- OVERLAY — arrow + labels + hint, runs every frame cheaply ---
-
 #[derive(Component)]
 pub struct MinimapOverlayDot;
 
@@ -352,25 +422,24 @@ fn update_minimap_overlay(
     let Ok((_player_transform, camera)) = player_query.get_single() else { return };
     let Ok(window) = windows.get_single() else { return };
 
-    // Despawn old overlay only
     for entity in overlay_query.iter() {
         commands.entity(entity).despawn();
     }
 
     let map_size = if state.expanded { MAP_SIZE_LARGE } else { MAP_SIZE_SMALL };
-    let win_w = window.width();
+    let win_w    = window.width();
     let map_left = win_w - map_size - 10.0;
-    let map_top = 10.0;
+    let map_top  = 10.0;
     let cx = map_left + map_size / 2.0;
     let cy = map_top  + map_size / 2.0;
 
-    // Player dot — yellow center
+    // Player dot
     commands.spawn((
         NodeBundle {
             style: Style {
                 position_type: PositionType::Absolute,
-                left: Val::Px(cx - 4.0),
-                top:  Val::Px(cy - 4.0),
+                left:   Val::Px(cx - 4.0),
+                top:    Val::Px(cy - 4.0),
                 width:  Val::Px(8.0),
                 height: Val::Px(8.0),
                 ..default()
@@ -382,8 +451,8 @@ fn update_minimap_overlay(
         MinimapOverlayDot,
     ));
 
-    // Direction arrow — 3 dots: tip + two wings
-    let yaw = camera.yaw;
+    // Direction arrow
+    let yaw   = camera.yaw;
     let sin_y = -yaw.sin();
     let cos_y = yaw.cos();
     let arrow_dist = 12.0;
@@ -400,8 +469,8 @@ fn update_minimap_overlay(
             NodeBundle {
                 style: Style {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(ax - 3.0),
-                    top:  Val::Px(az - 3.0),
+                    left:   Val::Px(ax - 3.0),
+                    top:    Val::Px(az - 3.0),
                     width:  Val::Px(6.0),
                     height: Val::Px(6.0),
                     ..default()
@@ -414,13 +483,13 @@ fn update_minimap_overlay(
         ));
     }
 
-    // Cardinal labels N E S W
+    // Cardinal labels
     let label_size = 14.0;
     let cardinals = [
-        ("N", cx,                             map_top + 4.0),
-        ("S", cx,                             map_top + map_size - 16.0),
-        ("W", map_left + 4.0,                 map_top + map_size / 2.0 - 7.0),
-        ("E", map_left + map_size - 12.0,     map_top + map_size / 2.0 - 7.0),
+        ("N", cx,                         map_top + 4.0),
+        ("S", cx,                         map_top + map_size - 16.0),
+        ("W", map_left + 4.0,             map_top + map_size / 2.0 - 7.0),
+        ("E", map_left + map_size - 12.0, map_top + map_size / 2.0 - 7.0),
     ];
 
     for (label, lx, ly) in cardinals {
@@ -447,7 +516,7 @@ fn update_minimap_overlay(
         ));
     }
 
-    // M key hint
+    // M hint
     let hint_text = if state.expanded { "[M] minimize" } else { "[M] expand" };
     commands.spawn((
         TextBundle {
