@@ -280,7 +280,7 @@ fn block_visual(block: BlockType) -> (&'static str, f32) {
         BlockType::Grass => ("block.glb#Scene0", 0.0),
         BlockType::Dirt => ("soil.glb#Scene0", 0.0),
         BlockType::Stone => ("soil.glb#Scene0", 0.0),
-        BlockType::Sand => ("block.glb#Scene0", 0.0),
+        BlockType::Sand => ("sand.glb#Scene0", 0.0),
         BlockType::Wood => ("block.glb#Scene0", 0.0),
         BlockType::Leaves => ("block.glb#Scene0", 0.0),
         BlockType::Water => ("water.glb#Scene0", 0.0),
