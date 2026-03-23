@@ -341,7 +341,7 @@ fn spawn_block_drop(
     block_type: BlockType,
 ) {
     let scene_path = match block_type {
-        BlockType::Grass => "block.glb#Scene0",
+        BlockType::Grass => "grass.glb#Scene0",
         BlockType::Dirt => "soil.glb#Scene0",
         BlockType::Stone => "soil.glb#Scene0",
         BlockType::Sand => "sand.glb#Scene0",

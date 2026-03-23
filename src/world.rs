@@ -277,7 +277,7 @@ fn sync_block_visuals(
 
 fn block_visual(block: BlockType) -> (&'static str, f32) {
     match block {
-        BlockType::Grass => ("block.glb#Scene0", 0.0),
+        BlockType::Grass => ("grass.glb#Scene0", 0.0),
         BlockType::Dirt => ("soil.glb#Scene0", 0.0),
         BlockType::Stone => ("soil.glb#Scene0", 0.0),
         BlockType::Sand => ("sand.glb#Scene0", 0.0),
