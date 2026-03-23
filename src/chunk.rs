@@ -1,6 +1,5 @@
+use crate::block::BlockType;
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
-use crate::block::{BlockType, Face};
 
 pub const CHUNK_SIZE: usize = 16;
 pub const CHUNK_HEIGHT: usize = 64;
@@ -32,97 +31,72 @@ impl Chunk {
         }
     }
 
-    pub fn is_face_visible(&self, x: usize, y: usize, z: usize, face: Face) -> bool {
-        let block = self.get_block(x, y, z);
-        if !block.is_solid() {
-            return false;
-        }
-
-        let (nx, ny, nz) = match face {
-            Face::Top => (x, y + 1, z),
-            Face::Bottom => {
-                if y == 0 {
-                    return false; // Don't render bottom of world
-                }
-                (x, y - 1, z)
-            }
-            Face::North => (x, y, z + 1),
-            Face::South => (x, y, z.wrapping_sub(1)),
-            Face::East => (x + 1, y, z),
-            Face::West => (x.wrapping_sub(1), y, z),
-        };
-
-        // If neighbor is outside chunk bounds, render the face
-        if nx >= CHUNK_SIZE || ny >= CHUNK_HEIGHT || nz >= CHUNK_SIZE {
-            return true;
-        }
-
-        // Check if neighbor block is transparent
-        let neighbor = self.get_block(nx, ny, nz);
-        neighbor.is_transparent()
-    }
-
-    pub fn generate_mesh(&self) -> Mesh {
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut indices = Vec::new();
-
+    pub fn get_surface_blocks(&self) -> Vec<(usize, usize, usize, BlockType)> {
+        let mut surface = Vec::new();
         for x in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_HEIGHT {
-                for z in 0..CHUNK_SIZE {
+            for z in 0..CHUNK_SIZE {
+                // Find the topmost solid OR water block
+                let mut top_y = None;
+                let mut top_block = BlockType::Air;
+
+                for y in (0..CHUNK_HEIGHT).rev() {
                     let block = self.get_block(x, y, z);
-                    if !block.is_solid() {
-                        continue;
+
+                    // Water surface — show water on top
+                    if matches!(block, BlockType::Water) {
+                        // Only show water if there's air above it
+                        let above = if y + 1 < CHUNK_HEIGHT {
+                            self.get_block(x, y + 1, z)
+                        } else {
+                            BlockType::Air
+                        };
+                        if matches!(above, BlockType::Air) {
+                            top_y = Some(y);
+                            top_block = BlockType::Water;
+                            break;
+                        }
                     }
 
-                    for face in Face::all() {
-                        if !self.is_face_visible(x, y, z, face) {
-                            continue;
+                    // Solid non-water block
+                    if block.is_solid() && !matches!(block, BlockType::Water) {
+                        let above = if y + 1 < CHUNK_HEIGHT {
+                            self.get_block(x, y + 1, z)
+                        } else {
+                            BlockType::Air
+                        };
+                        if above.is_transparent() {
+                            top_y = Some(y);
+                            top_block = block;
+                            break;
                         }
+                    }
+                }
 
-                        let world_pos = Vec3::new(
-                            (self.position.x * CHUNK_SIZE as i32 + x as i32) as f32,
-                            y as f32,
-                            (self.position.z * CHUNK_SIZE as i32 + z as i32) as f32,
-                        );
+                let Some(ty) = top_y else { continue };
 
-                        let vertices = face.get_vertices(world_pos);
-                        let normal = face.normal();
+                // Top surface block (grass, water, sand, etc.)
+                surface.push((x, ty, z, top_block));
 
-                        let start_index = positions.len() as u32;
-
-                        for vertex in vertices.iter() {
-                            positions.push([vertex.x, vertex.y, vertex.z]);
-                            normals.push([normal.x, normal.y, normal.z]);
+                // Only add subsurface layers under non-water blocks
+                if !matches!(top_block, BlockType::Water) {
+                    for depth in 1..=2usize {
+                        if ty >= depth {
+                            let by = ty - depth;
+                            let b = self.get_block(x, by, z);
+                            if b.is_solid() && !matches!(b, BlockType::Water) {
+                                surface.push((x, by, z, b));
+                            }
                         }
-
-                        indices.extend_from_slice(&[
-                            start_index,
-                            start_index + 1,
-                            start_index + 2,
-                            start_index,
-                            start_index + 2,
-                            start_index + 3,
-                        ]);
                     }
                 }
             }
         }
-
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            Default::default(),
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_indices(Indices::U32(indices))
+        surface
     }
 }
 
 pub struct ChunkPlugin;
 
 impl Plugin for ChunkPlugin {
-    fn build(&self, _app: &mut App) {
-        // Chunk systems will be added by WorldPlugin
-    }
+    fn build(&self, _app: &mut App) {}
 }
