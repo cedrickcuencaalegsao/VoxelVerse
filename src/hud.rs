@@ -5,13 +5,88 @@ use crate::physics::PLAYER_HEIGHT;
 #[derive(Component)]
 pub struct CoordText;
 
+#[derive(Component)]
+pub struct Crosshair;
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_hud)
+        app.add_systems(Startup, (setup_hud, setup_crosshair))
             .add_systems(Update, update_coords);
     }
+}
+
+fn setup_crosshair(mut commands: Commands) {
+    // Root node — full screen, centered
+    commands.spawn(NodeBundle {
+        style: Style {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            position_type: PositionType::Absolute,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        ..default()
+    })
+    .with_children(|parent| {
+        // Horizontal bar
+        parent.spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(20.0),
+                    height: Val::Px(2.0),
+                    ..default()
+                },
+                background_color: BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                ..default()
+            },
+            Crosshair,
+        ));
+
+        // Vertical bar
+        parent.spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(2.0),
+                    height: Val::Px(20.0),
+                    ..default()
+                },
+                background_color: BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                ..default()
+            },
+            Crosshair,
+        ));
+
+        // Dark outline horizontal — gives contrast on bright backgrounds
+        parent.spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                width: Val::Px(22.0),
+                height: Val::Px(4.0),
+                ..default()
+            },
+            background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
+            z_index: ZIndex::Local(-1),
+            ..default()
+        });
+
+        // Dark outline vertical
+        parent.spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                width: Val::Px(4.0),
+                height: Val::Px(22.0),
+                ..default()
+            },
+            background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
+            z_index: ZIndex::Local(-1),
+            ..default()
+        });
+    });
 }
 
 fn setup_hud(mut commands: Commands) {

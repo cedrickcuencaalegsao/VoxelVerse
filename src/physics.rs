@@ -1,8 +1,8 @@
-use crate::block::BlockType;
-use crate::camera::Player;
-use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE};
-use crate::world::World as GameWorld;
 use bevy::prelude::*;
+use crate::camera::Player;
+use crate::world::World as GameWorld;
+use crate::chunk::{CHUNK_SIZE, CHUNK_HEIGHT};
+use crate::block::BlockType;
 
 #[derive(Component)]
 pub struct Velocity(pub Vec3);
@@ -26,9 +26,7 @@ impl Plugin for PhysicsPlugin {
 fn is_solid_at(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
-    bx: i32,
-    by: i32,
-    bz: i32,
+    bx: i32, by: i32, bz: i32,
 ) -> bool {
     if by < 0 || by >= CHUNK_HEIGHT as i32 {
         return false;
@@ -50,6 +48,9 @@ fn is_solid_at(
     block.is_solid() && !matches!(block, BlockType::Water)
 }
 
+/// Check if the player AABB overlaps any solid block.
+/// The AABB is defined by center (x, feet_y..feet_y+PLAYER_HEIGHT, z)
+/// with half-width PLAYER_WIDTH on X and Z.
 fn aabb_overlaps_solid(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
@@ -93,38 +94,27 @@ fn apply_physics(
         // --- Y axis ---
         let desired_feet_y = feet_y + velocity.0.y * dt;
         let new_feet_y = resolve_y(
-            &world,
-            &chunks,
-            pos.x,
-            desired_feet_y,
-            pos.z,
-            &mut velocity.0.y,
-            &mut grounded,
+            &world, &chunks,
+            pos.x, desired_feet_y, pos.z,
+            &mut velocity.0.y, &mut grounded,
         );
 
         // --- X axis ---
         let desired_x = pos.x + velocity.0.x * dt;
         let new_x = resolve_axis(
-            &world,
-            &chunks,
-            desired_x,
-            pos.z,
-            pos.x,
-            new_feet_y,
-            pos.z,
+            &world, &chunks,
+            desired_x, new_feet_y, pos.z,
+            pos.x, new_feet_y, pos.z,
             true,
             &mut velocity.0.x,
         );
 
+        // --- Z axis ---
         let desired_z = pos.z + velocity.0.z * dt;
         let new_z = resolve_axis(
-            &world,
-            &chunks,
-            new_x,
-            desired_z,
-            new_x,
-            new_feet_y,
-            pos.z,
+            &world, &chunks,
+            new_x, new_feet_y, desired_z,
+            new_x, new_feet_y, pos.z,
             false,
             &mut velocity.0.z,
         );
@@ -169,9 +159,7 @@ fn resolve_y(
                     break;
                 }
             }
-            if hit {
-                break;
-            }
+            if hit { break; }
         }
 
         if hit {
@@ -196,9 +184,7 @@ fn resolve_y(
                     break;
                 }
             }
-            if hit {
-                break;
-            }
+            if hit { break; }
         }
 
         if hit {
@@ -210,22 +196,34 @@ fn resolve_y(
 
     new_feet_y
 }
+
+/// Generic axis resolver — tries the desired position, falls back to
+/// stepping back 1 unit at a time until no overlap.
 fn resolve_axis(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
-    desired_x: f32,
-    desired_feet_y: f32,
-    desired_z: f32,
-    safe_x: f32,
-    safe_z: f32,
+    // desired full position
+    desired_x: f32, desired_feet_y: f32, desired_z: f32,
+    // safe fallback position (before this axis moved)
+    safe_x: f32, _safe_feet_y: f32, safe_z: f32,
     is_x: bool,
     vel: &mut f32,
 ) -> f32 {
-    
+    // If desired position has no overlap — accept it
     if !aabb_overlaps_solid(world, chunks, desired_x, desired_feet_y, desired_z) {
         return if is_x { desired_x } else { desired_z };
     }
 
+    // Collision — stop velocity and return safe position
     *vel = 0.0;
     if is_x { safe_x } else { safe_z }
+}
+
+fn _player_corners(x: f32, z: f32) -> [(i32, i32); 4] {
+    [
+        ((x - PLAYER_WIDTH).floor() as i32, (z - PLAYER_WIDTH).floor() as i32),
+        ((x + PLAYER_WIDTH).floor() as i32, (z - PLAYER_WIDTH).floor() as i32),
+        ((x - PLAYER_WIDTH).floor() as i32, (z + PLAYER_WIDTH).floor() as i32),
+        ((x + PLAYER_WIDTH).floor() as i32, (z + PLAYER_WIDTH).floor() as i32),
+    ]
 }

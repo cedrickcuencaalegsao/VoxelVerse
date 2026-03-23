@@ -9,6 +9,7 @@ mod hud;
 mod input;
 mod physics;
 mod world;
+mod block_breaking;
 
 use block_registry::{BlockRegistry, BlockRegistryPlugin};
 use camera::CameraPlugin;
@@ -18,6 +19,7 @@ use hud::HudPlugin;
 use input::InputPlugin;
 use physics::PhysicsPlugin;
 use world::WorldPlugin;
+use block_breaking::BlockBreakingPlugin;
 
 fn main() {
     App::new()
@@ -38,6 +40,7 @@ fn main() {
             BlockRegistryPlugin,
             FirePlugin,
             HudPlugin,
+            BlockBreakingPlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
         .add_systems(Startup, (setup, set_window_title))
