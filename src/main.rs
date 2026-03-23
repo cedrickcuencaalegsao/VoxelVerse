@@ -25,7 +25,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Voxel Game".to_string(),
+                title: "Voxel Verse".to_string(),
                 resolution: (1280.0, 720.0).into(),
                 ..default()
             }),
@@ -65,6 +65,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 fn set_window_title(world: Res<crate::world::World>, mut windows: Query<&mut Window>) {
     if let Ok(mut window) = windows.get_single_mut() {
-        window.title = format!("VoxelVerse — seed: {}", world.seed);
+        window.title = format!("Voxel Verse — seed: {}", world.seed);
     }
 }

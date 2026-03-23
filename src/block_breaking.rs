@@ -341,10 +341,14 @@ fn spawn_block_drop(
     block_type: BlockType,
 ) {
     let scene_path = match block_type {
-        BlockType::Grass | BlockType::Dirt => "block.glb#Scene0",
+        BlockType::Grass => "block.glb#Scene0",
+        BlockType::Dirt => "soil.glb#Scene0",
         BlockType::Stone => "soil.glb#Scene0",
-        BlockType::Sand => "block.glb#Scene0",
-        _ => "block.glb#Scene0",
+        BlockType::Sand => "sand.glb#Scene0",
+        BlockType::Wood => "block.glb#Scene0",
+        BlockType::Leaves => "block.glb#Scene0",
+        BlockType::Water => "water.glb#Scene0",
+        BlockType::Air => "block.glb#Scene0",
     };
 
     commands.spawn((
