@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "VoxelVerse"
+version = "0.1.0"
+dependencies = [
+ "bevy 0.14.2",
+ "bevy_gltf_kun",
+ "noise",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3979,16 +3989,6 @@ checksum = "ac9557c559cd6fc9867e122e20d2cbefc9ca29d80d027a8e39310920ed2f0a97"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "my_bevy_game"
-version = "0.1.0"
-dependencies = [
- "bevy 0.14.2",
- "bevy_gltf_kun",
- "noise",
- "rand 0.8.5",
 ]
 
 [[package]]
