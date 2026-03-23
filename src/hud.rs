@@ -194,35 +194,27 @@ fn snap_coord(v: f32) -> f32 {
     let rounded = v.round();
     if (v - rounded).abs() < 0.05 { rounded.floor() } else { v.floor() }
 }
-
 fn setup_stats(mut commands: Commands) {
-    commands
-        .spawn(NodeBundle {
+    commands.spawn((
+        TextBundle {
             style: Style {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(10.0),
-                left: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(2.0),
+                right: Val::Px(10.0),
                 ..default()
             },
-            background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            text: Text::from_section(
+                "FPS: --",
+                TextStyle {
+                    font_size: 13.0,
+                    color: Color::srgb(0.3, 1.0, 0.3),
+                    ..default()
+                },
+            ),
             ..default()
-        })
-        .with_children(|parent| {
-            parent.spawn((
-                TextBundle::from_section(
-                    "FPS: --",
-                    TextStyle {
-                        font_size: 14.0,
-                        color: Color::srgb(0.4, 1.0, 0.4),
-                        ..default()
-                    },
-                ),
-                StatsText,
-            ));
-        });
+        },
+        StatsText,
+    ));
 }
 
 fn update_stats(
@@ -233,29 +225,20 @@ fn update_stats(
 ) {
     let Ok(mut text) = text_query.get_single_mut() else { return };
 
-    // FPS
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
 
-    // Frame time in ms
     let frame_ms = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0)
         * 1000.0;
 
-    // Entity count
-    let entity_count = all_entities.iter().count();
+    let entity_count  = all_entities.iter().count();
+    let chunk_count   = world.chunks.len();
 
-    // Chunk count
-    let chunk_count = world.chunks.len();
-
-    // Approximate visible blocks (surface only, 3 layers)
-    let visible_blocks = chunk_count * 16 * 16 * 3;
-
-    // FPS color — green good, yellow ok, red bad
     let fps_color = if fps >= 55.0 {
         Color::srgb(0.3, 1.0, 0.3)
     } else if fps >= 30.0 {
@@ -266,12 +249,8 @@ fn update_stats(
 
     text.sections[0].style.color = fps_color;
     text.sections[0].value = format!(
-        "FPS:     {:.0}  ({:.1}ms)\nEntities: {}\nChunks:  {}\nBlocks:  ~{}",
-        fps,
-        frame_ms,
-        entity_count,
-        chunk_count,
-        visible_blocks,
+        "FPS {:.0} ({:.1}ms)  |  {} entities  |  {} chunks",
+        fps, frame_ms, entity_count, chunk_count,
     );
 }
 
