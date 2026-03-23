@@ -42,7 +42,7 @@ impl Chunk {
             Face::Top => (x, y + 1, z),
             Face::Bottom => {
                 if y == 0 {
-                    return false;
+                    return false; // Don't render bottom of world
                 }
                 (x, y - 1, z)
             }
@@ -52,10 +52,12 @@ impl Chunk {
             Face::West => (x.wrapping_sub(1), y, z),
         };
 
+        // If neighbor is outside chunk bounds, render the face
         if nx >= CHUNK_SIZE || ny >= CHUNK_HEIGHT || nz >= CHUNK_SIZE {
             return true;
         }
 
+        // Check if neighbor block is transparent
         let neighbor = self.get_block(nx, ny, nz);
         neighbor.is_transparent()
     }
@@ -86,6 +88,7 @@ impl Chunk {
 
                         let vertices = face.get_vertices(world_pos);
                         let normal = face.normal();
+
                         let start_index = positions.len() as u32;
 
                         for vertex in vertices.iter() {
@@ -106,75 +109,20 @@ impl Chunk {
             }
         }
 
-        Mesh::new(PrimitiveTopology::TriangleList, Default::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-            .with_inserted_indices(Indices::U32(indices))
-    }
-
-    pub fn generate_lod_mesh(&self) -> Mesh {
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut indices = Vec::new();
-
-        const STEP: usize = 2;
-
-        let mut x = 0;
-        while x + STEP <= CHUNK_SIZE {
-            let mut z = 0;
-            while z + STEP <= CHUNK_SIZE {
-                let h00 = self.top_solid_y(x,        z       );
-                let h10 = self.top_solid_y(x + STEP, z       );
-                let h01 = self.top_solid_y(x,        z + STEP);
-                let h11 = self.top_solid_y(x + STEP, z + STEP);
-
-                let wx = (self.position.x * CHUNK_SIZE as i32 + x as i32) as f32;
-                let wz = (self.position.z * CHUNK_SIZE as i32 + z as i32) as f32;
-                let step = STEP as f32;
-
-                let base = positions.len() as u32;
-
-                positions.push([wx,        h00, wz       ]);
-                positions.push([wx + step, h10, wz       ]);
-                positions.push([wx + step, h11, wz + step]);
-                positions.push([wx,        h01, wz + step]);
-
-                let normal = [0.0f32, 1.0, 0.0];
-                for _ in 0..4 {
-                    normals.push(normal);
-                }
-
-                indices.extend_from_slice(&[
-                    base, base + 1, base + 2,
-                    base, base + 2, base + 3,
-                ]);
-
-                z += STEP;
-            }
-            x += STEP;
-        }
-
-        Mesh::new(PrimitiveTopology::TriangleList, Default::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-            .with_inserted_indices(Indices::U32(indices))
-    }
-
-    fn top_solid_y(&self, x: usize, z: usize) -> f32 {
-        let x = x.min(CHUNK_SIZE - 1);
-        let z = z.min(CHUNK_SIZE - 1);
-        for y in (0..CHUNK_HEIGHT).rev() {
-            let b = self.get_block(x, y, z);
-            if b.is_solid() && !matches!(b, BlockType::Water) {
-                return y as f32 + 1.0;
-            }
-        }
-        0.0
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            Default::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices))
     }
 }
 
 pub struct ChunkPlugin;
 
 impl Plugin for ChunkPlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, _app: &mut App) {
+        // Chunk systems will be added by WorldPlugin
+    }
 }

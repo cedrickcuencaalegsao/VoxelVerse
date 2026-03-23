@@ -41,12 +41,12 @@ impl Plugin for WorldPlugin {
     }
 }
 
+// --- NOISE CONFIGURATION ---
 const TERRAIN_SCALE: f64 = 0.01;
 const DAMPENING: f64 = 0.6;
 const OCTAVES: usize = 7;
 const PERSISTENCE: f64 = 0.5;
 const LACUNARITY: f64 = 2.0;
-const LOD_DISTANCE: i32 = 4;
 
 fn fbm_noise(
     noise: &Perlin,
@@ -150,8 +150,8 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                 chunk.set_block(x, y, z, block);
             }
 
-            let dist_from_origin =
-                ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
+            // Trees only on Grass, not too high or low, and outside city zone
+            let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
             if height > 30 && height < 50 && dist_from_origin > 50.0 {
                 let tree_val = fbm_noise(
                     noise,
@@ -204,14 +204,9 @@ fn generate_chunks(
             let mut chunk = Chunk::new(chunk_pos);
             generate_terrain(&mut chunk, &world.noise);
 
-            // Full voxel mesh for nearby chunks, cheap LOD silhouette for far ones
-            let mesh = if x.abs().max(z.abs()) <= LOD_DISTANCE {
-                chunk.generate_mesh()
-            } else {
-                chunk.generate_lod_mesh()
-            };
-
+            let mesh = chunk.generate_mesh();
             let mesh_handle = meshes.add(mesh);
+
             let material = registry.material.clone().unwrap();
 
             let entity = commands
