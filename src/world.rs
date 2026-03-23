@@ -26,7 +26,7 @@ impl Default for World {
         Self {
             chunks: HashMap::new(),
             noise: Perlin::new(seed),
-            render_distance: 4, // keep low — we're spawning real models now
+            render_distance: 4,
             seed,
         }
     }
@@ -157,8 +157,8 @@ fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
     asset_server: Res<AssetServer>,
-    camera_query: Query<&Transform, With<Camera>>,
     registry: Res<BlockRegistry>,
+    camera_query: Query<&Transform, With<Camera>>,
 ) {
     if !registry.loaded {
         return;
@@ -190,7 +190,6 @@ fn generate_chunks(
 
             let surface_blocks = chunk.get_surface_blocks();
 
-            // Spawn a parent entity to hold all block instances for this chunk
             let chunk_entity = commands
                 .spawn((
                     SpatialBundle::default(),
@@ -200,8 +199,6 @@ fn generate_chunks(
                     for (lx, ly, lz, block_type) in surface_blocks {
                         let world_x = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
                         let world_z = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
-
-                        // Pick the right GLB scene based on block type
                         let scene_path = block_scene_path(block_type);
 
                         parent.spawn(SceneBundle {
@@ -221,7 +218,6 @@ fn generate_chunks(
         }
     }
 
-    // Despawn out-of-range chunks
     let chunks_to_remove: Vec<IVec3> = world
         .chunks
         .keys()
@@ -239,17 +235,16 @@ fn generate_chunks(
     }
 }
 
-/// Map block type to GLB scene path.
-/// Right now all blocks use block.glb — you can add more GLBs later.
 fn block_scene_path(block: BlockType) -> &'static str {
     match block {
-        BlockType::Grass | BlockType::Dirt => "block.glb#Scene0",
-        BlockType::Stone => "block.glb#Scene0",
-        BlockType::Sand  => "block.glb#Scene0",
-        BlockType::Wood  => "block.glb#Scene0",
-        BlockType::Leaves => "block.glb#Scene0",
-        BlockType::Water => "block.glb#Scene0",
-        BlockType::Air   => "block.glb#Scene0",
+        BlockType::Grass             => "block.glb#Scene0",
+        BlockType::Dirt              => "soil.glb#Scene0",
+        BlockType::Stone             => "soil.glb#Scene0",
+        BlockType::Sand              => "block.glb#Scene0",
+        BlockType::Wood              => "block.glb#Scene0",
+        BlockType::Leaves            => "block.glb#Scene0",
+        BlockType::Water             => "block.glb#Scene0",
+        BlockType::Air               => "block.glb#Scene0",
     }
 }
 

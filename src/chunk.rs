@@ -31,7 +31,6 @@ impl Chunk {
         }
     }
 
-    /// Returns all surface blocks — blocks that have air above them
     pub fn get_surface_blocks(&self) -> Vec<(usize, usize, usize, BlockType)> {
         let mut surface = Vec::new();
         for x in 0..CHUNK_SIZE {
@@ -39,14 +38,24 @@ impl Chunk {
                 for y in (0..CHUNK_HEIGHT).rev() {
                     let block = self.get_block(x, y, z);
                     if block.is_solid() && !matches!(block, BlockType::Water) {
-                        // Check if the block above is air or water
                         let above = if y + 1 < CHUNK_HEIGHT {
                             self.get_block(x, y + 1, z)
                         } else {
                             BlockType::Air
                         };
                         if above.is_transparent() {
+                            // Top surface block
                             surface.push((x, y, z, block));
+
+                            // 2 blocks below the surface
+                            for depth in 1..=2 {
+                                if y >= depth {
+                                    let below = self.get_block(x, y - depth, z);
+                                    if below.is_solid() {
+                                        surface.push((x, y - depth, z, below));
+                                    }
+                                }
+                            }
                         }
                         break;
                     }
