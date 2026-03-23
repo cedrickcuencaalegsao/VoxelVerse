@@ -5,6 +5,7 @@ mod block_registry;
 mod camera;
 mod chunk;
 mod fire;
+mod hud;
 mod input;
 mod physics;
 mod world;
@@ -13,6 +14,7 @@ use block_registry::{BlockRegistry, BlockRegistryPlugin};
 use camera::CameraPlugin;
 use chunk::ChunkPlugin;
 use fire::FirePlugin;
+use hud::HudPlugin;
 use input::InputPlugin;
 use physics::PhysicsPlugin;
 use world::WorldPlugin;
@@ -35,6 +37,7 @@ fn main() {
             PhysicsPlugin,
             BlockRegistryPlugin,
             FirePlugin,
+            HudPlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
         .add_systems(Startup, (setup, set_window_title))
@@ -52,16 +55,12 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..default()
         },
         // Angled sun so each face gets different brightness — gives depth
-        transform: Transform::from_xyz(1.0, 2.0, 1.0)
-            .looking_at(Vec3::ZERO, Vec3::Y),
+        transform: Transform::from_xyz(1.0, 2.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
 
-fn set_window_title(
-    world: Res<crate::world::World>,
-    mut windows: Query<&mut Window>,
-) {
+fn set_window_title(world: Res<crate::world::World>, mut windows: Query<&mut Window>) {
     if let Ok(mut window) = windows.get_single_mut() {
         window.title = format!("VoxelVerse — seed: {}", world.seed);
     }

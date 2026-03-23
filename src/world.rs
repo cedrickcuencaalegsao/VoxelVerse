@@ -59,14 +59,12 @@ fn fbm_noise(
     let mut frequency = 1.0;
     let mut amplitude = 1.0;
     let mut max_value = 0.0;
-
     for _ in 0..octaves {
         total += noise.get([x * frequency, z * frequency]) * amplitude;
         max_value += amplitude;
         amplitude *= persistence;
         frequency *= lacunarity;
     }
-
     total / max_value
 }
 
@@ -75,7 +73,6 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
     const CITY_HEIGHT: usize = 35;
 
     let dist_from_origin = ((x as f32).powi(2) + (z as f32).powi(2)).sqrt();
-
     if dist_from_origin < CITY_RADIUS {
         return CITY_HEIGHT;
     }
@@ -90,8 +87,8 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
 
     let x_f = x as f64 * TERRAIN_SCALE;
     let z_f = z as f64 * TERRAIN_SCALE;
-
     let dist = ((x as f64).powi(2) + (z as f64).powi(2)).sqrt();
+
     const FLAT_RADIUS: f64 = 64.0;
     const MOUNTAIN_RADIUS: f64 = 256.0;
     let mt = ((dist - FLAT_RADIUS) / (MOUNTAIN_RADIUS - FLAT_RADIUS)).clamp(0.0, 1.0);
@@ -132,7 +129,6 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                 } else {
                     BlockType::Stone
                 };
-
                 chunk.set_block(x, y, z, block);
             }
 
@@ -187,7 +183,6 @@ fn generate_chunks(
 
             let mut chunk = Chunk::new(chunk_pos);
             generate_terrain(&mut chunk, &world.noise);
-
             let surface_blocks = chunk.get_surface_blocks();
 
             let chunk_entity = commands
@@ -197,16 +192,21 @@ fn generate_chunks(
                 ))
                 .with_children(|parent| {
                     for (lx, ly, lz, block_type) in surface_blocks {
-                        let world_x = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
-                        let world_z = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
-                        let scene_path = block_scene_path(block_type);
+                        let wx = (chunk_pos.x * CHUNK_SIZE as i32 + lx as i32) as f32;
+                        let wy = ly as f32;
+                        let wz = (chunk_pos.z * CHUNK_SIZE as i32 + lz as i32) as f32;
+
+                        // Each block occupies exactly [wx, wx+1] x [wy, wy+1] x [wz, wz+1]
+                        // The GLB is centered at wx+0.5, wy+0.5, wz+0.5
+                        // so the visual sits perfectly inside the 1x1x1 hitbox
+                        let center = Vec3::new(wx + 0.5, wy + 0.5, wz + 0.5);
+
+                        let (scene_path, y_offset) = block_visual(block_type);
 
                         parent.spawn(SceneBundle {
                             scene: asset_server.load(scene_path),
-                            transform: Transform::from_xyz(
-                                world_x as f32,
-                                ly as f32,
-                                world_z as f32,
+                            transform: Transform::from_translation(
+                                center + Vec3::new(0.0, y_offset, 0.0)
                             ),
                             ..default()
                         });
@@ -235,16 +235,19 @@ fn generate_chunks(
     }
 }
 
-fn block_scene_path(block: BlockType) -> &'static str {
+/// Returns (scene_path, y_offset).
+/// y_offset nudges the GLB up or down so it sits flush in the 1x1x1 cell.
+/// Grass uses block.glb (top layer), subsurface uses soil.glb.
+fn block_visual(block: BlockType) -> (&'static str, f32) {
     match block {
-        BlockType::Grass             => "block.glb#Scene0",
-        BlockType::Dirt              => "soil.glb#Scene0",
-        BlockType::Stone             => "soil.glb#Scene0",
-        BlockType::Sand              => "block.glb#Scene0",
-        BlockType::Wood              => "block.glb#Scene0",
-        BlockType::Leaves            => "block.glb#Scene0",
-        BlockType::Water             => "block.glb#Scene0",
-        BlockType::Air               => "block.glb#Scene0",
+        BlockType::Grass  => ("block.glb#Scene0", 0.0),
+        BlockType::Dirt   => ("soil.glb#Scene0",  0.0),
+        BlockType::Stone  => ("soil.glb#Scene0",  0.0),
+        BlockType::Sand   => ("block.glb#Scene0", 0.0),
+        BlockType::Wood   => ("block.glb#Scene0", 0.0),
+        BlockType::Leaves => ("block.glb#Scene0", 0.0),
+        BlockType::Water  => ("block.glb#Scene0", 0.0),
+        BlockType::Air    => ("block.glb#Scene0", 0.0),
     }
 }
 
@@ -281,5 +284,5 @@ fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
 }
 
 pub fn get_spawn_height(noise: &Perlin) -> f32 {
-    get_height(noise, 0, 0) as f32 + 1.0
+    get_height(noise, 0, 0) as f32 + 2.0
 }
