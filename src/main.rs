@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{WgpuSettings, Backends, RenderCreation};
+use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 use bevy::window::PresentMode;
 
 mod block;
+mod block_breaking;
 mod block_registry;
 mod camera;
 mod chunk;
@@ -12,9 +13,10 @@ mod fire;
 mod hud;
 mod input;
 mod physics;
+mod tree_breaking;
 mod world;
-mod block_breaking;
 
+use block_breaking::BlockBreakingPlugin;
 use block_registry::{BlockRegistry, BlockRegistryPlugin};
 use camera::CameraPlugin;
 use chunk::ChunkPlugin;
@@ -23,8 +25,8 @@ use fire::FirePlugin;
 use hud::HudPlugin;
 use input::InputPlugin;
 use physics::PhysicsPlugin;
+use tree_breaking::TreeBreakingPlugin;
 use world::WorldPlugin;
-use block_breaking::BlockBreakingPlugin;
 
 fn main() {
     App::new()
@@ -58,6 +60,7 @@ fn main() {
             HudPlugin,
             BlockBreakingPlugin,
             DayNightPlugin,
+            TreeBreakingPlugin,
         ))
         // Start with sunrise sky — day/night will take over immediately
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
@@ -76,16 +79,12 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             shadows_enabled: true,
             ..default()
         },
-        transform: Transform::from_xyz(1.0, 2.0, 1.0)
-            .looking_at(Vec3::ZERO, Vec3::Y),
+        transform: Transform::from_xyz(1.0, 2.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 }
 
-fn set_window_title(
-    world: Res<crate::world::World>,
-    mut windows: Query<&mut Window>,
-) {
+fn set_window_title(world: Res<crate::world::World>, mut windows: Query<&mut Window>) {
     if let Ok(mut window) = windows.get_single_mut() {
         window.title = format!("Voxel Verse — seed: {}", world.seed);
     }

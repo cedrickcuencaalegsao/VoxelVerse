@@ -182,6 +182,7 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32)> {
 
     tree_positions
 }
+
 fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
@@ -207,7 +208,7 @@ fn generate_chunks(
 
     let render_distance = world.render_distance;
 
-    // Collect missing chunks and sort closest-first so nearby terrain loads first
+    // Collect missing chunks sorted closest-first
     let mut pending: Vec<IVec3> = (-render_distance..=render_distance)
         .flat_map(|cx| {
             (-render_distance..=render_distance)
@@ -222,7 +223,7 @@ fn generate_chunks(
         dx * dx + dz * dz
     });
 
-    // Limit new chunk spawns per frame to avoid frame-time spikes
+    // Only generate 2 chunks per frame to avoid spikes
     for chunk_pos in pending.iter().take(2) {
         let mut chunk = Chunk::new(*chunk_pos);
         let tree_positions = generate_terrain(&mut chunk, &world.noise);
@@ -252,13 +253,20 @@ fn generate_chunks(
                     ));
                 }
 
-                // Tree visuals — one GLB per tree, no block data written
+                // Tree visuals — tagged with Tree component for tree_breaking
                 for (wx, wy, wz) in tree_positions {
-                    parent.spawn(SceneBundle {
-                        scene: asset_server.load("tree_1.glb#Scene0"),
-                        transform: Transform::from_xyz(wx as f32 + 0.5, wy as f32, wz as f32 + 0.5),
-                        ..default()
-                    });
+                    parent.spawn((
+                        SceneBundle {
+                            scene: asset_server.load("tree_1.glb#Scene0"),
+                            transform: Transform::from_xyz(
+                                wx as f32 + 0.5,
+                                wy as f32,
+                                wz as f32 + 0.5,
+                            ),
+                            ..default()
+                        },
+                        crate::tree_breaking::Tree { health: 1.0 },
+                    ));
                 }
             })
             .id();
