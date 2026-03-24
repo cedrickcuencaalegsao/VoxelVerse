@@ -35,16 +35,13 @@ impl Chunk {
         let mut surface = Vec::new();
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
-                // Find the topmost solid OR water block
                 let mut top_y = None;
                 let mut top_block = BlockType::Air;
 
                 for y in (0..CHUNK_HEIGHT).rev() {
                     let block = self.get_block(x, y, z);
 
-                    // Water surface — show water on top
                     if matches!(block, BlockType::Water) {
-                        // Only show water if there's air above it
                         let above = if y + 1 < CHUNK_HEIGHT {
                             self.get_block(x, y + 1, z)
                         } else {
@@ -57,7 +54,6 @@ impl Chunk {
                         }
                     }
 
-                    // Solid non-water block
                     if block.is_solid() && !matches!(block, BlockType::Water) {
                         let above = if y + 1 < CHUNK_HEIGHT {
                             self.get_block(x, y + 1, z)
@@ -74,10 +70,8 @@ impl Chunk {
 
                 let Some(ty) = top_y else { continue };
 
-                // Top surface block (grass, water, sand, etc.)
                 surface.push((x, ty, z, top_block));
 
-                // Only add subsurface layers under non-water blocks
                 if !matches!(top_block, BlockType::Water) {
                     for depth in 1..=2usize {
                         if ty >= depth {
