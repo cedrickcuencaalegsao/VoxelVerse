@@ -325,7 +325,7 @@ fn spawn_wood_drops(
         let drop_pos = tree_pos + offset;
         commands.spawn((
             SceneBundle {
-                scene: asset_server.load("block.glb#Scene0"),
+                scene: asset_server.load("wood.glb#Scene0"),
                 transform: Transform::from_translation(drop_pos)
                     .with_scale(Vec3::splat(0.35)),
                 ..default()
