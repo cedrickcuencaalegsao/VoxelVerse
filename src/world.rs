@@ -30,7 +30,6 @@ impl Default for World {
     }
 }
 
-// Tags each spawned GLB block visual with its world block position
 #[derive(Component)]
 pub struct BlockVisual {
     pub world_pos: IVec3,
@@ -50,6 +49,12 @@ const DAMPENING: f64 = 0.6;
 const OCTAVES: usize = 7;
 const PERSISTENCE: f64 = 0.5;
 const LACUNARITY: f64 = 2.0;
+
+// Tree tuning
+// Raise threshold for fewer trees, lower for more
+const TREE_THRESHOLD: f64 = 0.30;
+// Minimum blocks between trees (grid cell size)
+const TREE_SPACING: i32 = 8;
 
 fn fbm_noise(
     noise: &Perlin,
@@ -75,6 +80,7 @@ fn fbm_noise(
 fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
     const CITY_RADIUS: f32 = 48.0;
     const CITY_HEIGHT: usize = 35;
+
     let dist_from_origin = ((x as f32).powi(2) + (z as f32).powi(2)).sqrt();
     if dist_from_origin < CITY_RADIUS {
         return CITY_HEIGHT;
@@ -99,23 +105,28 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
 
     let continent_noise = fbm_noise(noise, x_f * 0.5, z_f * 0.5, 3, 0.4, 2.0);
     let detail_noise = fbm_noise(noise, x_f, z_f, OCTAVES, PERSISTENCE, LACUNARITY);
-    let base_height = 30.0;
     let mountain_intensity = (continent_noise + 1.0) * 0.5 * mountain_blend;
     let height_variation =
         detail_noise * (15.0 * mountain_blend + mountain_intensity * 40.0) * DAMPENING;
-    let natural_height =
-        (base_height + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
+
+    let natural_height = (30.0 + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
+
     let blended = CITY_HEIGHT as f32 * (1.0 - blend_t) + natural_height as f32 * blend_t;
     blended.round() as usize
 }
 
-fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
+/// Fills chunk block data.
+/// Returns world-space tree base positions (world_x, world_y, world_z).
+fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32)> {
+    let mut tree_positions: Vec<(i32, i32, i32)> = Vec::new();
+
     for x in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
             let world_x = chunk.position.x * CHUNK_SIZE as i32 + x as i32;
             let world_z = chunk.position.z * CHUNK_SIZE as i32 + z as i32;
             let height = get_height(noise, world_x, world_z);
 
+            // --- terrain blocks ---
             for y in 0..CHUNK_HEIGHT {
                 let block = if y > height {
                     if y <= 28 {
@@ -143,22 +154,33 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) {
                 chunk.set_block(x, y, z, block);
             }
 
+            // --- tree placement ---
             let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
-            if height > 30 && height < 50 && dist_from_origin > 50.0 {
-                let tree_val = fbm_noise(
-                    noise,
-                    world_x as f64 * 0.5,
-                    world_z as f64 * 0.5,
-                    2,
-                    0.5,
-                    2.0,
-                );
-                if tree_val > 0.75 {
-                    generate_tree(chunk, x, height + 1, z);
+
+            if height > 32 && height < 52 && dist_from_origin > 40.0 {
+                // Grid snap — define grid_x/grid_z BEFORE using them
+                let grid_x = world_x.div_euclid(TREE_SPACING) * TREE_SPACING;
+                let grid_z = world_z.div_euclid(TREE_SPACING) * TREE_SPACING;
+
+                if world_x == grid_x && world_z == grid_z {
+                    let tree_val = fbm_noise(
+                        noise,
+                        world_x as f64 * 0.12 + 100.0,
+                        world_z as f64 * 0.12 + 100.0,
+                        3,
+                        0.5,
+                        2.0,
+                    );
+
+                    if tree_val > TREE_THRESHOLD {
+                        tree_positions.push((world_x, (height + 1) as i32, world_z));
+                    }
                 }
             }
         }
     }
+
+    tree_positions
 }
 
 fn generate_chunks(
@@ -186,46 +208,73 @@ fn generate_chunks(
 
     let render_distance = world.render_distance;
 
-    for cx in -render_distance..=render_distance {
-        for cz in -render_distance..=render_distance {
-            let chunk_pos = IVec3::new(camera_chunk.x + cx, 0, camera_chunk.z + cz);
-            if world.chunks.contains_key(&chunk_pos) {
-                continue;
-            }
+    // Collect missing chunks sorted closest-first
+    let mut pending: Vec<IVec3> = (-render_distance..=render_distance)
+        .flat_map(|cx| {
+            (-render_distance..=render_distance)
+                .map(move |cz| IVec3::new(camera_chunk.x + cx, 0, camera_chunk.z + cz))
+        })
+        .filter(|pos| !world.chunks.contains_key(pos))
+        .collect();
 
-            let mut chunk = Chunk::new(chunk_pos);
-            generate_terrain(&mut chunk, &world.noise);
-            let surface_blocks = chunk.get_surface_blocks();
+    pending.sort_by_key(|pos| {
+        let dx = pos.x - camera_chunk.x;
+        let dz = pos.z - camera_chunk.z;
+        dx * dx + dz * dz
+    });
 
-            let chunk_entity = commands
-                .spawn((SpatialBundle::default(), chunk))
-                .with_children(|parent| {
-                    for (lx, ly, lz, block_type) in surface_blocks {
-                        let wx = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
-                        let wz = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
-                        let center = Vec3::new(wx as f32 + 0.5, ly as f32 + 0.5, wz as f32 + 0.5);
-                        let (scene_path, y_offset) = block_visual(block_type);
+    // Only generate 2 chunks per frame to avoid spikes
+    for chunk_pos in pending.iter().take(2) {
+        let mut chunk = Chunk::new(*chunk_pos);
+        let tree_positions = generate_terrain(&mut chunk, &world.noise);
+        let surface_blocks = chunk.get_surface_blocks();
 
-                        parent.spawn((
-                            SceneBundle {
-                                scene: asset_server.load(scene_path),
-                                transform: Transform::from_translation(
-                                    center + Vec3::new(0.0, y_offset, 0.0),
-                                ),
-                                ..default()
-                            },
-                            BlockVisual {
-                                world_pos: IVec3::new(wx, ly as i32, wz),
-                            },
-                        ));
-                    }
-                })
-                .id();
+        let chunk_entity = commands
+            .spawn((SpatialBundle::default(), chunk))
+            .with_children(|parent| {
+                // Surface block visuals
+                for (lx, ly, lz, block_type) in surface_blocks {
+                    let wx = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
+                    let wz = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
+                    let center = Vec3::new(wx as f32 + 0.5, ly as f32 + 0.5, wz as f32 + 0.5);
+                    let (scene_path, y_offset) = block_visual(block_type);
 
-            world.chunks.insert(chunk_pos, chunk_entity);
-        }
+                    parent.spawn((
+                        SceneBundle {
+                            scene: asset_server.load(scene_path),
+                            transform: Transform::from_translation(
+                                center + Vec3::new(0.0, y_offset, 0.0),
+                            ),
+                            ..default()
+                        },
+                        BlockVisual {
+                            world_pos: IVec3::new(wx, ly as i32, wz),
+                        },
+                    ));
+                }
+
+                // Tree visuals — tagged with Tree component for tree_breaking
+                for (wx, wy, wz) in tree_positions {
+                    parent.spawn((
+                        SceneBundle {
+                            scene: asset_server.load("tree_1.glb#Scene0"),
+                            transform: Transform::from_xyz(
+                                wx as f32 + 0.5,
+                                wy as f32,
+                                wz as f32 + 0.5,
+                            ),
+                            ..default()
+                        },
+                        crate::tree_breaking::Tree { health: 1.0 },
+                    ));
+                }
+            })
+            .id();
+
+        world.chunks.insert(*chunk_pos, chunk_entity);
     }
 
+    // Despawn out-of-range chunks
     let chunks_to_remove: Vec<IVec3> = world
         .chunks
         .keys()
@@ -243,7 +292,6 @@ fn generate_chunks(
     }
 }
 
-/// Every frame check all block visuals — if the block data is now Air, despawn the GLB.
 fn sync_block_visuals(
     mut commands: Commands,
     world: Res<World>,
@@ -277,7 +325,7 @@ fn sync_block_visuals(
 
 fn block_visual(block: BlockType) -> (&'static str, f32) {
     match block {
-        BlockType::Grass => ("block.glb#Scene0", 0.0),
+        BlockType::Grass => ("grass.glb#Scene0", 0.0),
         BlockType::Dirt => ("soil.glb#Scene0", 0.0),
         BlockType::Stone => ("soil.glb#Scene0", 0.0),
         BlockType::Sand => ("sand.glb#Scene0", 0.0),
@@ -285,44 +333,6 @@ fn block_visual(block: BlockType) -> (&'static str, f32) {
         BlockType::Leaves => ("block.glb#Scene0", 0.0),
         BlockType::Water => ("water.glb#Scene0", 0.0),
         BlockType::Air => ("block.glb#Scene0", 0.0),
-    }
-}
-
-fn generate_tree(chunk: &mut Chunk, x: usize, y: usize, z: usize) {
-    let trunk_height = 5;
-    for dy in 0..trunk_height {
-        if y + dy < CHUNK_HEIGHT {
-            chunk.set_block(x, y + dy, z, BlockType::Wood);
-        }
-    }
-    for dx in -2..=2_i32 {
-        for dz in -2..=2_i32 {
-            for dy in trunk_height - 1..trunk_height + 2 {
-                if y + dy >= CHUNK_HEIGHT {
-                    continue;
-                }
-                let leaf_x = x as i32 + dx;
-                let leaf_z = z as i32 + dz;
-                if leaf_x >= 0
-                    && leaf_x < CHUNK_SIZE as i32
-                    && leaf_z >= 0
-                    && leaf_z < CHUNK_SIZE as i32
-                {
-                    if dx.abs() + dz.abs() <= 3 {
-                        if chunk.get_block(leaf_x as usize, y + dy, leaf_z as usize)
-                            == BlockType::Air
-                        {
-                            chunk.set_block(
-                                leaf_x as usize,
-                                y + dy,
-                                leaf_z as usize,
-                                BlockType::Leaves,
-                            );
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
