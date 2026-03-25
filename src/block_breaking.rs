@@ -345,8 +345,8 @@ fn spawn_block_drop(
         BlockType::Dirt => "soil.glb#Scene0",
         BlockType::Stone => "soil.glb#Scene0",
         BlockType::Sand => "sand.glb#Scene0",
-        BlockType::Wood => "block.glb#Scene0",
-        BlockType::Leaves => "block.glb#Scene0",
+        BlockType::Wood => "wood.glb#Scene0",
+        BlockType::Leaves => "leaves.glb#Scene0",
         BlockType::Water => "water.glb#Scene0",
         BlockType::Air => "block.glb#Scene0",
     };
