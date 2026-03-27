@@ -1,10 +1,16 @@
 use crate::block::BlockType;
 use crate::block_registry::BlockRegistry;
 use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
+use crate::tree_breaking::{TreePart, TreeRoot};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Event)]
+pub struct RenderBlockAndNeighborsEvent {
+    pub world_pos: IVec3,
+}
 
 #[derive(Resource)]
 pub struct World {
@@ -40,7 +46,15 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<World>()
-            .add_systems(Update, (generate_chunks, sync_block_visuals));
+            .add_event::<RenderBlockAndNeighborsEvent>()
+            .add_systems(
+                Update,
+                (
+                    generate_chunks,
+                    sync_block_visuals,
+                    render_block_and_neighbors,
+                ),
+            );
     }
 }
 
@@ -50,11 +64,46 @@ const OCTAVES: usize = 7;
 const PERSISTENCE: f64 = 0.5;
 const LACUNARITY: f64 = 2.0;
 
-// Tree tuning
-// Raise threshold for fewer trees, lower for more
 const TREE_THRESHOLD: f64 = 0.30;
-// Minimum blocks between trees (grid cell size)
 const TREE_SPACING: i32 = 8;
+
+#[derive(Clone, Copy)]
+enum TreeSize {
+    Small,
+    Medium,
+    Large,
+}
+
+struct TreeBlock {
+    wx: i32,
+    wy: i32,
+    wz: i32,
+    is_leaves: bool,
+}
+
+struct TreeRng(u32);
+
+impl TreeRng {
+    fn new(seed: u32) -> Self {
+        Self(if seed == 0 { 0x1337 } else { seed })
+    }
+    fn next(&mut self) -> u32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        self.0
+    }
+    fn f32(&mut self) -> f32 {
+        (self.next() & 0xFFFFFF) as f32 / 16777216.0
+    }
+    fn range(&mut self, min: i32, max: i32) -> i32 {
+        if max <= min {
+            min
+        } else {
+            min + (self.next() % (max - min) as u32) as i32
+        }
+    }
+}
 
 fn fbm_noise(
     noise: &Perlin,
@@ -110,23 +159,202 @@ fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
         detail_noise * (15.0 * mountain_blend + mountain_intensity * 40.0) * DAMPENING;
 
     let natural_height = (30.0 + height_variation).clamp(1.0, CHUNK_HEIGHT as f64 - 1.0) as usize;
-
     let blended = CITY_HEIGHT as f32 * (1.0 - blend_t) + natural_height as f32 * blend_t;
     blended.round() as usize
 }
 
-/// Fills chunk block data.
-/// Returns world-space tree base positions (world_x, world_y, world_z).
-fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32)> {
-    let mut tree_positions: Vec<(i32, i32, i32)> = Vec::new();
+fn add_leaf_clump(
+    leaves: &mut HashSet<IVec3>,
+    wood: &HashSet<IVec3>,
+    rng: &mut TreeRng,
+    cx: i32,
+    cy: i32,
+    cz: i32,
+    radius: i32,
+) {
+    let r_sq = radius as f32 * radius as f32;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                let dist_sq = (dx * dx + dy * dy + dz * dz) as f32;
+                let jitter = rng.f32() * (radius as f32) * 0.8;
+                let drop_mod = if dy < 0 && (dist_sq > r_sq * 0.6) && rng.f32() > 0.4 {
+                    1.0
+                } else {
+                    0.0
+                };
 
+                if dist_sq + jitter + drop_mod <= r_sq {
+                    let pos = IVec3::new(cx + dx, cy + dy, cz + dz);
+                    if !wood.contains(&pos) {
+                        leaves.insert(pos);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn build_tree_blocks(wx: i32, base_y: i32, wz: i32, size: TreeSize) -> Vec<TreeBlock> {
+    let seed_mix = (wx as u32)
+        .wrapping_mul(73856093)
+        .wrapping_add((wz as u32).wrapping_mul(19349663));
+    let mut rng = TreeRng::new(seed_mix);
+
+    let (height, branch_count, branch_radius) = match size {
+        TreeSize::Small => (rng.range(6, 9), rng.range(2, 4), 2),
+        TreeSize::Medium => (rng.range(11, 15), rng.range(4, 7), 3),
+        TreeSize::Large => (rng.range(16, 20), rng.range(7, 10), 4),
+    };
+
+    let mut wood_set: HashSet<IVec3> = HashSet::new();
+    let mut leaf_set: HashSet<IVec3> = HashSet::new();
+
+    for dy in 0..height {
+        let (max_r, threshold_sq) = match size {
+            TreeSize::Large => {
+                if dy < 3 {
+                    (2, 4)
+                } else if dy < height / 2 {
+                    (1, 2)
+                } else {
+                    (1, 1)
+                }
+            }
+            TreeSize::Medium => {
+                if dy < 2 {
+                    (1, 1)
+                } else {
+                    (0, 0)
+                }
+            }
+            TreeSize::Small => (0, 0),
+        };
+        for dx in -max_r..=max_r {
+            for dz in -max_r..=max_r {
+                if dx * dx + dz * dz <= threshold_sq {
+                    wood_set.insert(IVec3::new(wx + dx, base_y + dy, wz + dz));
+                }
+            }
+        }
+    }
+
+    let trunk_top = base_y + height;
+    let branch_start_y = base_y + (height / 3).max(1);
+
+    for _ in 0..branch_count {
+        let mut b_pos = Vec3::new(
+            wx as f32,
+            rng.range(branch_start_y, trunk_top) as f32,
+            wz as f32,
+        );
+        let angle = rng.f32() * std::f32::consts::TAU;
+        let elevation = rng.f32() * 0.4 + 0.3;
+
+        let dir = Vec3::new(
+            angle.cos() * (1.0 - elevation * elevation).sqrt(),
+            elevation,
+            angle.sin() * (1.0 - elevation * elevation).sqrt(),
+        )
+        .normalize();
+
+        let branch_length = rng.range(3, (height / 2).max(4));
+        let steps = branch_length * 2;
+        let step_vec = dir * 0.5;
+
+        for step_i in 0..=steps {
+            b_pos += step_vec;
+            let bx = b_pos.x.round() as i32;
+            let by = b_pos.y.round() as i32;
+            let bz = b_pos.z.round() as i32;
+            wood_set.insert(IVec3::new(bx, by, bz));
+
+            if matches!(size, TreeSize::Large) {
+                let percent = (step_i as f32) / (steps as f32);
+                if percent < 0.6 {
+                    wood_set.insert(IVec3::new(bx, by - 1, bz));
+                    if (bx + by + bz) % 2 == 0 {
+                        let padding = if (bx + by) % 3 == 0 {
+                            IVec3::X
+                        } else {
+                            IVec3::Z
+                        };
+                        wood_set.insert(IVec3::new(bx, by, bz) + padding);
+                    }
+                }
+            }
+        }
+
+        let calculated_clump_radius = rng.range(branch_radius - 1, branch_radius + 1);
+        add_leaf_clump(
+            &mut leaf_set,
+            &wood_set,
+            &mut rng,
+            b_pos.x.round() as i32,
+            b_pos.y.round() as i32,
+            b_pos.z.round() as i32,
+            calculated_clump_radius,
+        );
+    }
+
+    let crown_branch_radius = rng.range(branch_radius, branch_radius + 2);
+    add_leaf_clump(
+        &mut leaf_set,
+        &wood_set,
+        &mut rng,
+        wx,
+        trunk_top,
+        wz,
+        crown_branch_radius,
+    );
+
+    let mut blocks = Vec::with_capacity(wood_set.len() + leaf_set.len());
+    for w in wood_set {
+        blocks.push(TreeBlock {
+            wx: w.x,
+            wy: w.y,
+            wz: w.z,
+            is_leaves: false,
+        });
+    }
+    for l in leaf_set {
+        blocks.push(TreeBlock {
+            wx: l.x,
+            wy: l.y,
+            wz: l.z,
+            is_leaves: true,
+        });
+    }
+
+    blocks
+}
+
+fn tree_size_at(wx: i32, wz: i32, noise: &Perlin) -> TreeSize {
+    let size_val = fbm_noise(
+        noise,
+        wx as f64 * 0.07 + 200.0,
+        wz as f64 * 0.07 + 200.0,
+        2,
+        0.5,
+        2.0,
+    );
+    if size_val < -0.2 {
+        TreeSize::Small
+    } else if size_val < 0.25 {
+        TreeSize::Medium
+    } else {
+        TreeSize::Large
+    }
+}
+
+fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32, TreeSize)> {
+    let mut tree_positions = Vec::new();
     for x in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
             let world_x = chunk.position.x * CHUNK_SIZE as i32 + x as i32;
             let world_z = chunk.position.z * CHUNK_SIZE as i32 + z as i32;
             let height = get_height(noise, world_x, world_z);
 
-            // --- terrain blocks ---
             for y in 0..CHUNK_HEIGHT {
                 let block = if y > height {
                     if y <= 28 {
@@ -134,31 +362,32 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32)> {
                     } else {
                         BlockType::Air
                     }
-                } else if y == height {
-                    if height <= 29 {
-                        BlockType::Sand
-                    } else if height > 55 {
-                        BlockType::Stone
-                    } else {
-                        BlockType::Grass
-                    }
-                } else if y > height.saturating_sub(3) {
-                    if height <= 29 {
-                        BlockType::Sand
-                    } else {
-                        BlockType::Dirt
-                    }
                 } else {
-                    BlockType::Stone
+                    let depth_from_surface = height.saturating_sub(y);
+
+                    if depth_from_surface == 0 {
+                        if height <= 29 {
+                            BlockType::Sand
+                        } else if height > 55 {
+                            BlockType::Stone
+                        } else {
+                            BlockType::Grass
+                        }
+                    } else if depth_from_surface <= 3 {
+                        if height <= 29 {
+                            BlockType::Sand
+                        } else {
+                            BlockType::Dirt
+                        }
+                    } else {
+                        BlockType::Stone
+                    }
                 };
                 chunk.set_block(x, y, z, block);
             }
 
-            // --- tree placement ---
             let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
-
             if height > 32 && height < 52 && dist_from_origin > 40.0 {
-                // Grid snap — define grid_x/grid_z BEFORE using them
                 let grid_x = world_x.div_euclid(TREE_SPACING) * TREE_SPACING;
                 let grid_z = world_z.div_euclid(TREE_SPACING) * TREE_SPACING;
 
@@ -171,15 +400,18 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32)> {
                         0.5,
                         2.0,
                     );
-
                     if tree_val > TREE_THRESHOLD {
-                        tree_positions.push((world_x, (height + 1) as i32, world_z));
+                        tree_positions.push((
+                            world_x,
+                            (height + 1) as i32,
+                            world_z,
+                            tree_size_at(world_x, world_z, noise),
+                        ));
                     }
                 }
             }
         }
     }
-
     tree_positions
 }
 
@@ -193,7 +425,6 @@ fn generate_chunks(
     if !registry.loaded {
         return;
     }
-
     let camera_pos = if let Ok(t) = camera_query.get_single() {
         t.translation
     } else {
@@ -205,10 +436,8 @@ fn generate_chunks(
         0,
         (camera_pos.z / CHUNK_SIZE as f32).floor() as i32,
     );
-
     let render_distance = world.render_distance;
 
-    // Collect missing chunks sorted closest-first
     let mut pending: Vec<IVec3> = (-render_distance..=render_distance)
         .flat_map(|cx| {
             (-render_distance..=render_distance)
@@ -223,28 +452,60 @@ fn generate_chunks(
         dx * dx + dz * dz
     });
 
-    // Only generate 2 chunks per frame to avoid spikes
     for chunk_pos in pending.iter().take(2) {
         let mut chunk = Chunk::new(*chunk_pos);
         let tree_positions = generate_terrain(&mut chunk, &world.noise);
         let surface_blocks = chunk.get_surface_blocks();
 
+        let mut rendered_trees = Vec::new();
+        for (wx, wy, wz, size) in tree_positions {
+            let tree_blocks = build_tree_blocks(wx, wy, wz, size);
+
+            for tb in &tree_blocks {
+                let lx = tb.wx - (chunk_pos.x * CHUNK_SIZE as i32);
+                let lz = tb.wz - (chunk_pos.z * CHUNK_SIZE as i32);
+                if lx >= 0
+                    && lx < CHUNK_SIZE as i32
+                    && lz >= 0
+                    && lz < CHUNK_SIZE as i32
+                    && tb.wy >= 0
+                    && tb.wy < CHUNK_HEIGHT as i32
+                {
+                    chunk.set_block(
+                        lx as usize,
+                        tb.wy as usize,
+                        lz as usize,
+                        if tb.is_leaves {
+                            BlockType::Leaves
+                        } else {
+                            BlockType::Wood
+                        },
+                    );
+                }
+            }
+            rendered_trees.push(tree_blocks);
+        }
+
         let chunk_entity = commands
             .spawn((SpatialBundle::default(), chunk))
             .with_children(|parent| {
-                // Surface block visuals
                 for (lx, ly, lz, block_type) in surface_blocks {
+                    if matches!(block_type, BlockType::Wood | BlockType::Leaves) {
+                        continue;
+                    }
                     let wx = chunk_pos.x * CHUNK_SIZE as i32 + lx as i32;
                     let wz = chunk_pos.z * CHUNK_SIZE as i32 + lz as i32;
-                    let center = Vec3::new(wx as f32 + 0.5, ly as f32 + 0.5, wz as f32 + 0.5);
                     let (scene_path, y_offset) = block_visual(block_type);
 
                     parent.spawn((
                         SceneBundle {
                             scene: asset_server.load(scene_path),
-                            transform: Transform::from_translation(
-                                center + Vec3::new(0.0, y_offset, 0.0),
-                            ),
+                            transform: Transform::from_translation(Vec3::new(
+                                wx as f32 + 0.5,
+                                ly as f32 + 0.5 + y_offset,
+                                wz as f32 + 0.5,
+                            ))
+                            .with_scale(Vec3::splat(1.06)),
                             ..default()
                         },
                         BlockVisual {
@@ -253,20 +514,53 @@ fn generate_chunks(
                     ));
                 }
 
-                // Tree visuals — tagged with Tree component for tree_breaking
-                for (wx, wy, wz) in tree_positions {
-                    parent.spawn((
-                        SceneBundle {
-                            scene: asset_server.load("tree_1.glb#Scene0"),
-                            transform: Transform::from_xyz(
-                                wx as f32 + 0.5,
-                                wy as f32,
-                                wz as f32 + 0.5,
-                            ),
-                            ..default()
-                        },
-                        crate::tree_breaking::Tree { health: 1.0 },
-                    ));
+                for tree_blocks in rendered_trees {
+                    let mut wood_count = 0;
+                    let mut leaves_count = 0;
+                    let mut pos_storage = Vec::with_capacity(tree_blocks.len());
+
+                    for tb in &tree_blocks {
+                        pos_storage.push(IVec3::new(tb.wx, tb.wy, tb.wz));
+                        if tb.is_leaves {
+                            leaves_count += 1;
+                        } else {
+                            wood_count += 1;
+                        }
+                    }
+
+                    parent
+                        .spawn((
+                            SpatialBundle::default(),
+                            TreeRoot {
+                                wood_count,
+                                leaves_count,
+                                blocks: pos_storage,
+                            },
+                        ))
+                        .with_children(|tree_builder| {
+                            for tb in tree_blocks {
+                                let scene_path = if tb.is_leaves {
+                                    "leaves.glb#Scene0"
+                                } else {
+                                    "wood.glb#Scene0"
+                                };
+                                let center = Vec3::new(
+                                    tb.wx as f32 + 0.5,
+                                    tb.wy as f32 + 0.5,
+                                    tb.wz as f32 + 0.5,
+                                );
+
+                                tree_builder.spawn((
+                                    SceneBundle {
+                                        scene: asset_server.load(scene_path),
+                                        transform: Transform::from_translation(center)
+                                            .with_scale(Vec3::splat(1.0)),
+                                        ..default()
+                                    },
+                                    TreePart,
+                                ));
+                            }
+                        });
                 }
             })
             .id();
@@ -274,7 +568,6 @@ fn generate_chunks(
         world.chunks.insert(*chunk_pos, chunk_entity);
     }
 
-    // Despawn out-of-range chunks
     let chunks_to_remove: Vec<IVec3> = world
         .chunks
         .keys()
@@ -297,15 +590,16 @@ fn sync_block_visuals(
     world: Res<World>,
     chunks: Query<&Chunk>,
     visuals: Query<(Entity, &BlockVisual)>,
+    asset_server: Res<AssetServer>,
 ) {
-    for (entity, visual) in visuals.iter() {
-        let bx = visual.world_pos.x;
-        let by = visual.world_pos.y;
-        let bz = visual.world_pos.z;
+    let mut broken_positions = Vec::new();
 
-        let chunk_x = bx.div_euclid(CHUNK_SIZE as i32);
-        let chunk_z = bz.div_euclid(CHUNK_SIZE as i32);
-        let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
+    for (entity, visual) in visuals.iter() {
+        let chunk_pos = IVec3::new(
+            visual.world_pos.x.div_euclid(CHUNK_SIZE as i32),
+            0,
+            visual.world_pos.z.div_euclid(CHUNK_SIZE as i32),
+        );
 
         let Some(&chunk_entity) = world.chunks.get(&chunk_pos) else {
             continue;
@@ -314,11 +608,73 @@ fn sync_block_visuals(
             continue;
         };
 
-        let lx = bx.rem_euclid(CHUNK_SIZE as i32) as usize;
-        let lz = bz.rem_euclid(CHUNK_SIZE as i32) as usize;
+        let lx = visual.world_pos.x.rem_euclid(CHUNK_SIZE as i32) as usize;
+        let lz = visual.world_pos.z.rem_euclid(CHUNK_SIZE as i32) as usize;
 
-        if chunk.get_block(lx, by as usize, lz as usize) == BlockType::Air {
+        if chunk.get_block(lx, visual.world_pos.y as usize, lz) == BlockType::Air {
             commands.entity(entity).despawn_recursive();
+            broken_positions.push(visual.world_pos);
+        }
+    }
+
+    if broken_positions.is_empty() {
+        return;
+    }
+
+    let mut existing_visuals = HashSet::new();
+    for (_, visual) in visuals.iter() {
+        existing_visuals.insert(visual.world_pos);
+    }
+
+    for pos in broken_positions {
+        let neighbors = [
+            pos + IVec3::X,
+            pos - IVec3::X,
+            pos + IVec3::Y,
+            pos - IVec3::Y,
+            pos + IVec3::Z,
+            pos - IVec3::Z,
+        ];
+
+        for n_pos in neighbors {
+            if existing_visuals.contains(&n_pos) {
+                continue;
+            }
+
+            let c_pos = IVec3::new(
+                n_pos.x.div_euclid(CHUNK_SIZE as i32),
+                0,
+                n_pos.z.div_euclid(CHUNK_SIZE as i32),
+            );
+            if let Some(&chunk_entity) = world.chunks.get(&c_pos) {
+                if let Ok(chunk) = chunks.get(chunk_entity) {
+                    if n_pos.y >= 0 && n_pos.y < CHUNK_HEIGHT as i32 {
+                        let lx = n_pos.x.rem_euclid(CHUNK_SIZE as i32) as usize;
+                        let lz = n_pos.z.rem_euclid(CHUNK_SIZE as i32) as usize;
+                        let b_type = chunk.get_block(lx, n_pos.y as usize, lz);
+
+                        if b_type != BlockType::Air {
+                            let (scene_path, y_offset) = block_visual(b_type);
+
+                            commands.entity(chunk_entity).with_children(|parent| {
+                                parent.spawn((
+                                    SceneBundle {
+                                        scene: asset_server.load(scene_path),
+                                        transform: Transform::from_translation(Vec3::new(
+                                            n_pos.x as f32 + 0.5,
+                                            n_pos.y as f32 + 0.5 + y_offset,
+                                            n_pos.z as f32 + 0.5,
+                                        ))
+                                        .with_scale(Vec3::splat(1.06)),
+                                        ..default()
+                                    },
+                                    BlockVisual { world_pos: n_pos },
+                                ));
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -327,15 +683,111 @@ fn block_visual(block: BlockType) -> (&'static str, f32) {
     match block {
         BlockType::Grass => ("grass.glb#Scene0", 0.0),
         BlockType::Dirt => ("soil.glb#Scene0", 0.0),
-        BlockType::Stone => ("soil.glb#Scene0", 0.0),
+        BlockType::Stone => ("stone.glb#Scene0", 0.0),
         BlockType::Sand => ("sand.glb#Scene0", 0.0),
-        BlockType::Wood => ("block.glb#Scene0", 0.0),
-        BlockType::Leaves => ("block.glb#Scene0", 0.0),
         BlockType::Water => ("water.glb#Scene0", 0.0),
-        BlockType::Air => ("block.glb#Scene0", 0.0),
+        _ => ("grass.glb#Scene0", 0.0),
     }
 }
 
 pub fn get_spawn_height(noise: &Perlin) -> f32 {
     get_height(noise, 0, 0) as f32 + 2.0
+}
+
+pub fn render_block_and_neighbors(
+    mut events: EventReader<RenderBlockAndNeighborsEvent>,
+    world: Res<World>,
+    chunks: Query<&Chunk>,
+    visuals: Query<&BlockVisual>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    fn spawn_visual_if_needed(
+        world_pos: IVec3,
+        world: &World,
+        chunks: &Query<&Chunk>,
+        visuals: &Query<&BlockVisual>,
+        commands: &mut Commands,
+        asset_server: &AssetServer,
+    ) {
+        if visuals.iter().any(|v| v.world_pos == world_pos) {
+            return;
+        }
+
+        let chunk_coord = IVec3::new(
+            world_pos.x.div_euclid(CHUNK_SIZE as i32),
+            world_pos.y.div_euclid(CHUNK_HEIGHT as i32),
+            world_pos.z.div_euclid(CHUNK_SIZE as i32),
+        );
+        let Some(&chunk_entity) = world.chunks.get(&chunk_coord) else {
+            return;
+        };
+        let Ok(chunk) = chunks.get(chunk_entity) else {
+            return;
+        };
+
+        let local_x = world_pos.x.rem_euclid(CHUNK_SIZE as i32) as usize;
+        let local_y = world_pos.y as usize;
+        let local_z = world_pos.z.rem_euclid(CHUNK_SIZE as i32) as usize;
+
+        if local_x >= CHUNK_SIZE || local_y >= CHUNK_HEIGHT || local_z >= CHUNK_SIZE {
+            return;
+        }
+
+        let block = chunk.get_block(local_x, local_y, local_z);
+        if block == BlockType::Air || block.is_transparent() {
+            return;
+        }
+
+        let (scene_path, y_offset) = block_visual(block);
+        commands.entity(chunk_entity).with_children(|parent| {
+            parent.spawn((
+                SceneBundle {
+                    scene: asset_server.load(scene_path),
+                    transform: Transform::from_translation(Vec3::new(
+                        world_pos.x as f32 + 0.5,
+                        world_pos.y as f32 + 0.5 + y_offset,
+                        world_pos.z as f32 + 0.5,
+                    ))
+                    .with_scale(Vec3::splat(1.07)),
+                    ..default()
+                },
+                BlockVisual { world_pos },
+            ));
+        });
+    }
+
+    const DIRS: [IVec3; 6] = [
+        IVec3::X,
+        IVec3::NEG_X,
+        IVec3::Y,
+        IVec3::NEG_Y,
+        IVec3::Z,
+        IVec3::NEG_Z,
+    ];
+
+    for event in events.read() {
+        let center = event.world_pos;
+
+        spawn_visual_if_needed(
+            center,
+            &world,
+            &chunks,
+            &visuals,
+            &mut commands,
+            &asset_server,
+        );
+
+        for dir in DIRS {
+            let neighbor = center + dir;
+            spawn_visual_if_needed(
+                neighbor,
+                &world,
+                &chunks,
+                &visuals,
+                &mut commands,
+                &asset_server,
+            );
+        }
+    }
 }

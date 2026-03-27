@@ -30,61 +30,46 @@ impl Chunk {
             self.blocks[x][y][z] = block_type;
         }
     }
-
     pub fn get_surface_blocks(&self) -> Vec<(usize, usize, usize, BlockType)> {
         let mut surface = Vec::new();
+
         for x in 0..CHUNK_SIZE {
-            for z in 0..CHUNK_SIZE {
-                let mut top_y = None;
-                let mut top_block = BlockType::Air;
+            for y in 0..CHUNK_HEIGHT {
+                for z in 0..CHUNK_SIZE {
+                    let b = self.blocks[x][y][z];
+                    if b == BlockType::Air || b == BlockType::Stone {
+                        continue;
+                    }
 
-                for y in (0..CHUNK_HEIGHT).rev() {
-                    let block = self.get_block(x, y, z);
+                    let mut exposed = false;
 
-                    if matches!(block, BlockType::Water) {
-                        let above = if y + 1 < CHUNK_HEIGHT {
-                            self.get_block(x, y + 1, z)
-                        } else {
-                            BlockType::Air
-                        };
-                        if matches!(above, BlockType::Air) {
-                            top_y = Some(y);
-                            top_block = BlockType::Water;
-                            break;
+                    if x == 0
+                        || x == CHUNK_SIZE - 1
+                        || z == 0
+                        || z == CHUNK_SIZE - 1
+                        || y == 0
+                        || y == CHUNK_HEIGHT - 1
+                    {
+                        exposed = true;
+                    } else {
+                        if self.blocks[x][y + 1][z] == BlockType::Air
+                            || self.blocks[x][y - 1][z] == BlockType::Air
+                            || self.blocks[x + 1][y][z] == BlockType::Air
+                            || self.blocks[x - 1][y][z] == BlockType::Air
+                            || self.blocks[x][y][z + 1] == BlockType::Air
+                            || self.blocks[x][y][z - 1] == BlockType::Air
+                        {
+                            exposed = true;
                         }
                     }
 
-                    if block.is_solid() && !matches!(block, BlockType::Water) {
-                        let above = if y + 1 < CHUNK_HEIGHT {
-                            self.get_block(x, y + 1, z)
-                        } else {
-                            BlockType::Air
-                        };
-                        if above.is_transparent() {
-                            top_y = Some(y);
-                            top_block = block;
-                            break;
-                        }
-                    }
-                }
-
-                let Some(ty) = top_y else { continue };
-
-                surface.push((x, ty, z, top_block));
-
-                if !matches!(top_block, BlockType::Water) {
-                    for depth in 1..=2usize {
-                        if ty >= depth {
-                            let by = ty - depth;
-                            let b = self.get_block(x, by, z);
-                            if b.is_solid() && !matches!(b, BlockType::Water) {
-                                surface.push((x, by, z, b));
-                            }
-                        }
+                    if exposed {
+                        surface.push((x, y, z, b));
                     }
                 }
             }
         }
+
         surface
     }
 }
