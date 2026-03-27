@@ -2,6 +2,8 @@ use crate::block::BlockType;
 use crate::camera::{MainCamera, Player};
 use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE};
 use crate::world::World as GameWorld;
+// WE IMPORT THE TREE BREAKING STATE HERE:
+use crate::tree_breaking::TreeBreakingState; 
 use bevy::prelude::*;
 
 const BREAK_TIME: f32 = 1.0;
@@ -127,12 +129,42 @@ fn handle_breaking(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
+    tree_state: Res<TreeBreakingState>, // <- WE ADD TREE BREAKING STATE HERE
 ) {
     let Some(target) = state.target else {
         state.progress = 0.0;
         return;
     };
 
+    // --- CHECK BLOCK TYPE FIRST ---
+    // We figure out the target's exact position on the map
+    let chunk_x = target.x.div_euclid(CHUNK_SIZE as i32);
+    let chunk_z = target.z.div_euclid(CHUNK_SIZE as i32);
+    let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
+
+    // Identify what we are aiming at right now!
+    let mut block_type = BlockType::Air;
+    if let Some(&entity) = world.chunks.get(&chunk_pos) {
+        if let Ok(chunk) = chunks.get(entity) {
+            let lx = target.x.rem_euclid(CHUNK_SIZE as i32) as usize;
+            let lz = target.z.rem_euclid(CHUNK_SIZE as i32) as usize;
+            block_type = chunk.get_block(lx, target.y as usize, lz as usize);
+        }
+    }
+
+    // THE MAGIC RULE:
+    // If we're looking at Wood or Leaves AND the tree_breaking.rs script acknowledges that 
+    // it belongs to an INTACT tree, STOP standard block-breaking dead in its tracks!
+    if (block_type == BlockType::Wood || block_type == BlockType::Leaves) && tree_state.target_part.is_some() {
+        state.progress = 0.0; // Clear any standard cracks trying to start 
+        if let Some(e) = state.crack_entity.take() {
+            commands.entity(e).despawn_recursive();
+        }
+        return; 
+    }
+    // ---------------------------------
+
+    // Normal non-tree clicking happens correctly down below:
     if !mouse.pressed(MouseButton::Left) {
         state.progress = 0.0;
         if let Some(e) = state.crack_entity.take() {
@@ -148,29 +180,13 @@ fn handle_breaking(
         state.crack_entity = Some(crack);
     }
 
+    // FINALLY BREAKING NORMAL BLOCKS! (Or player-placed independent logs):
     if state.progress >= 1.0 {
         state.progress = 0.0;
 
         if let Some(e) = state.crack_entity.take() {
             commands.entity(e).despawn_recursive();
         }
-
-        let chunk_x = target.x.div_euclid(CHUNK_SIZE as i32);
-        let chunk_z = target.z.div_euclid(CHUNK_SIZE as i32);
-        let chunk_pos = IVec3::new(chunk_x, 0, chunk_z);
-
-        // Get block type before removing
-        let block_type = if let Some(&entity) = world.chunks.get(&chunk_pos) {
-            if let Ok(chunk) = chunks.get(entity) {
-                let lx = target.x.rem_euclid(CHUNK_SIZE as i32) as usize;
-                let lz = target.z.rem_euclid(CHUNK_SIZE as i32) as usize;
-                chunk.get_block(lx, target.y as usize, lz as usize)
-            } else {
-                BlockType::Air
-            }
-        } else {
-            BlockType::Air
-        };
 
         // Set block to Air — sync_block_visuals will despawn the GLB
         if let Some(&entity) = world.chunks.get(&chunk_pos) {
@@ -282,7 +298,7 @@ fn spawn_break_particles(
         ..default()
     });
 
-    let offsets = [
+    let offsets =[
         Vec3::new(1.0, 1.0, 1.0),
         Vec3::new(-1.0, 1.0, 1.0),
         Vec3::new(1.0, -1.0, 1.0),

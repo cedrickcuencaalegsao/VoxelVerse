@@ -87,7 +87,7 @@ fn raycast_tree_target(
         let dist = to_tree.length();
 
         if dist > TREE_REACH { continue; }
-        if to_tree.normalize_or_zero().dot(forward) < 0.4 { continue; }
+        if to_tree.normalize_or_zero().dot(forward) < 0.98 { continue; }
 
         if dist < best_dist {
             best_dist = dist;
