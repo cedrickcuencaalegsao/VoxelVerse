@@ -48,9 +48,31 @@ fn is_solid_at(
     block.is_solid() && !matches!(block, BlockType::Water)
 }
 
-/// Check if the player AABB overlaps any solid block.
-/// The AABB is defined by center (x, feet_y..feet_y+PLAYER_HEIGHT, z)
-/// with half-width PLAYER_WIDTH on X and Z.
+// NEW: Pre-check if we are standing on solid ground (used every frame)
+fn is_grounded(
+    world: &GameWorld,
+    chunks: &Query<&crate::chunk::Chunk>,
+    x: f32,
+    feet_y: f32,
+    z: f32,
+) -> bool {
+    let probe_block_y = (feet_y - 0.001).floor() as i32; // tiny probe just below feet
+
+    let min_x = (x - PLAYER_WIDTH + 0.001).floor() as i32;
+    let max_x = (x + PLAYER_WIDTH - 0.001).floor() as i32;
+    let min_z = (z - PLAYER_WIDTH + 0.001).floor() as i32;
+    let max_z = (z + PLAYER_WIDTH - 0.001).floor() as i32;
+
+    for bx in min_x..=max_x {
+        for bz in min_z..=max_z {
+            if is_solid_at(world, chunks, bx, probe_block_y, bz) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn aabb_overlaps_solid(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
@@ -86,35 +108,58 @@ fn apply_physics(
     let dt = time.delta_seconds();
 
     for (mut transform, mut velocity, mut grounded) in query.iter_mut() {
-        velocity.0.y += GRAVITY * dt;
-
         let pos = transform.translation;
         let feet_y = pos.y - PLAYER_HEIGHT;
 
-        // --- Y axis ---
+        // === NEW GROUNDING LOGIC (eliminates idle sinking) ===
+        let currently_grounded = is_grounded(&world, &chunks, pos.x, feet_y, pos.z);
+
+        if currently_grounded && velocity.0.y <= 0.0 {
+            velocity.0.y = 0.0;           // prevent any downward drift
+            grounded.0 = true;
+        } else {
+            velocity.0.y += GRAVITY * dt; // only apply gravity when in air
+            grounded.0 = false;
+        }
+
+        // === Y axis resolution (safety net + upward movement) ===
         let desired_feet_y = feet_y + velocity.0.y * dt;
         let new_feet_y = resolve_y(
-            &world, &chunks,
-            pos.x, desired_feet_y, pos.z,
-            &mut velocity.0.y, &mut grounded,
+            &world,
+            &chunks,
+            pos.x,
+            desired_feet_y,
+            pos.z,
+            &mut velocity.0.y,
+            &mut grounded,
         );
 
-        // --- X axis ---
+        // === X axis ===
         let desired_x = pos.x + velocity.0.x * dt;
         let new_x = resolve_axis(
-            &world, &chunks,
-            desired_x, new_feet_y, pos.z,
-            pos.x, new_feet_y, pos.z,
+            &world,
+            &chunks,
+            desired_x,
+            new_feet_y,
+            pos.z,
+            pos.x,
+            new_feet_y,
+            pos.z,
             true,
             &mut velocity.0.x,
         );
 
-        // --- Z axis ---
+        // === Z axis ===
         let desired_z = pos.z + velocity.0.z * dt;
         let new_z = resolve_axis(
-            &world, &chunks,
-            new_x, new_feet_y, desired_z,
-            new_x, new_feet_y, pos.z,
+            &world,
+            &chunks,
+            new_x,
+            new_feet_y,
+            desired_z,
+            new_x,
+            new_feet_y,
+            pos.z,
             false,
             &mut velocity.0.z,
         );
@@ -134,6 +179,7 @@ fn handle_jump(
     }
 }
 
+// (unchanged - kept for upward movement and final safety)
 fn resolve_y(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
@@ -144,7 +190,6 @@ fn resolve_y(
     grounded: &mut Grounded,
 ) -> f32 {
     if *vel_y <= 0.0 {
-        // Moving down — check all corners at foot level
         let foot_block_y = (new_feet_y - 0.001).floor() as i32;
         let min_x = (x - PLAYER_WIDTH + 0.001).floor() as i32;
         let max_x = (x + PLAYER_WIDTH - 0.001).floor() as i32;
@@ -169,7 +214,6 @@ fn resolve_y(
         }
         grounded.0 = false;
     } else {
-        // Moving up — check all corners at head level
         let head_block_y = (new_feet_y + PLAYER_HEIGHT - 0.001).floor() as i32;
         let min_x = (x - PLAYER_WIDTH + 0.001).floor() as i32;
         let max_x = (x + PLAYER_WIDTH - 0.001).floor() as i32;
@@ -197,33 +241,22 @@ fn resolve_y(
     new_feet_y
 }
 
-/// Generic axis resolver — tries the desired position, falls back to
-/// stepping back 1 unit at a time until no overlap.
 fn resolve_axis(
     world: &GameWorld,
     chunks: &Query<&crate::chunk::Chunk>,
-    // desired full position
-    desired_x: f32, desired_feet_y: f32, desired_z: f32,
-    // safe fallback position (before this axis moved)
-    safe_x: f32, _safe_feet_y: f32, safe_z: f32,
+    desired_x: f32,
+    desired_feet_y: f32,
+    desired_z: f32,
+    safe_x: f32,
+    _safe_feet_y: f32,
+    safe_z: f32,
     is_x: bool,
     vel: &mut f32,
 ) -> f32 {
-    // If desired position has no overlap — accept it
     if !aabb_overlaps_solid(world, chunks, desired_x, desired_feet_y, desired_z) {
         return if is_x { desired_x } else { desired_z };
     }
 
-    // Collision — stop velocity and return safe position
     *vel = 0.0;
     if is_x { safe_x } else { safe_z }
-}
-
-fn _player_corners(x: f32, z: f32) -> [(i32, i32); 4] {
-    [
-        ((x - PLAYER_WIDTH).floor() as i32, (z - PLAYER_WIDTH).floor() as i32),
-        ((x + PLAYER_WIDTH).floor() as i32, (z - PLAYER_WIDTH).floor() as i32),
-        ((x - PLAYER_WIDTH).floor() as i32, (z + PLAYER_WIDTH).floor() as i32),
-        ((x + PLAYER_WIDTH).floor() as i32, (z + PLAYER_WIDTH).floor() as i32),
-    ]
 }
