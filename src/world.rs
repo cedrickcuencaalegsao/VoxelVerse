@@ -173,11 +173,12 @@ fn add_leaf_clump(
     radius: i32,
 ) {
     let r_sq = radius as f32 * radius as f32;
+    let radius_f = radius as f32;
     for dy in -radius..=radius {
         for dx in -radius..=radius {
             for dz in -radius..=radius {
                 let dist_sq = (dx * dx + dy * dy + dz * dz) as f32;
-                let jitter = rng.f32() * (radius as f32) * 0.8;
+                let jitter = rng.f32() * radius_f * 0.8;
                 let drop_mod = if dy < 0 && (dist_sq > r_sq * 0.6) && rng.f32() > 0.4 {
                     1.0
                 } else {
@@ -207,8 +208,13 @@ fn build_tree_blocks(wx: i32, base_y: i32, wz: i32, size: TreeSize) -> Vec<TreeB
         TreeSize::Large => (rng.range(16, 20), rng.range(7, 10), 4),
     };
 
-    let mut wood_set: HashSet<IVec3> = HashSet::new();
-    let mut leaf_set: HashSet<IVec3> = HashSet::new();
+    let (wood_cap, leaf_cap) = match size {
+        TreeSize::Small => (32, 128),
+        TreeSize::Medium => (64, 512),
+        TreeSize::Large => (128, 1024),
+    };
+    let mut wood_set: HashSet<IVec3> = HashSet::with_capacity(wood_cap);
+    let mut leaf_set: HashSet<IVec3> = HashSet::with_capacity(leaf_cap);
 
     for dy in 0..height {
         let (max_r, threshold_sq) = match size {
@@ -348,7 +354,7 @@ fn tree_size_at(wx: i32, wz: i32, noise: &Perlin) -> TreeSize {
 }
 
 fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32, TreeSize)> {
-    let mut tree_positions = Vec::new();
+    let mut tree_positions = Vec::with_capacity(16);
     for x in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
             let world_x = chunk.position.x * CHUNK_SIZE as i32 + x as i32;
@@ -438,26 +444,30 @@ fn generate_chunks(
     );
     let render_distance = world.render_distance;
 
-    let mut pending: Vec<IVec3> = (-render_distance..=render_distance)
-        .flat_map(|cx| {
-            (-render_distance..=render_distance)
-                .map(move |cz| IVec3::new(camera_chunk.x + cx, 0, camera_chunk.z + cz))
-        })
-        .filter(|pos| !world.chunks.contains_key(pos))
-        .collect();
-
+    let rd = render_distance;
+    let cap = ((2 * rd + 1) * (2 * rd + 1)) as usize;
+    let mut pending = Vec::with_capacity(cap);
+    for cx in -rd..=rd {
+        for cz in -rd..=rd {
+            let pos = IVec3::new(camera_chunk.x + cx, 0, camera_chunk.z + cz);
+            if !world.chunks.contains_key(&pos) {
+                pending.push(pos);
+            }
+        }
+    }
     pending.sort_by_key(|pos| {
         let dx = pos.x - camera_chunk.x;
         let dz = pos.z - camera_chunk.z;
         dx * dx + dz * dz
     });
 
+    let mut rendered_trees = Vec::with_capacity(16);
+
     for chunk_pos in pending.iter().take(2) {
         let mut chunk = Chunk::new(*chunk_pos);
         let tree_positions = generate_terrain(&mut chunk, &world.noise);
         let surface_blocks = chunk.get_surface_blocks();
 
-        let mut rendered_trees = Vec::new();
         for (wx, wy, wz, size) in tree_positions {
             let tree_blocks = build_tree_blocks(wx, wy, wz, size);
 
@@ -514,7 +524,7 @@ fn generate_chunks(
                     ));
                 }
 
-                for tree_blocks in rendered_trees {
+                for tree_blocks in rendered_trees.drain(..) {
                     let mut wood_count = 0;
                     let mut leaves_count = 0;
                     let mut pos_storage = Vec::with_capacity(tree_blocks.len());
@@ -716,7 +726,7 @@ pub fn render_block_and_neighbors(
 
         let chunk_coord = IVec3::new(
             world_pos.x.div_euclid(CHUNK_SIZE as i32),
-            world_pos.y.div_euclid(CHUNK_HEIGHT as i32),
+            0,
             world_pos.z.div_euclid(CHUNK_SIZE as i32),
         );
         let Some(&chunk_entity) = world.chunks.get(&chunk_coord) else {
