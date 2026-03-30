@@ -1,12 +1,10 @@
 use bevy::prelude::*;
 use crate::camera::MainCamera;
-use crate::world::World;
+use crate::world::{World, get_height};   // get_height is now public
 use crate::chunk::{Chunk, CHUNK_SIZE, CHUNK_HEIGHT};
 use crate::block::BlockType;
 
 const TREE_REACH: f32 = 6.0;
-// Calibrates base mathematical hardness (Total time = total components (wood+leaves) * THIS multiplier natively evaluating bounding mapping successfully!)
-// E.G. ~50-block total mapped bounds equals around exactly 3.0s structurally correctly scaling appropriately matching checks successfully smoothly handling structurally! 
 const SECONDS_PER_BLOCK_BREAK: f32 = 0.06;
 
 #[derive(Component)]
@@ -16,13 +14,13 @@ pub struct TreePart;
 pub struct TreeRoot {
     pub wood_count: u32,
     pub leaves_count: u32,
-    pub blocks: Vec<IVec3>, 
+    pub blocks: Vec<IVec3>,
 }
 
 #[derive(Component)]
 pub struct TreeCrackOverlay {
     pub _tree_part_entity: Entity,
-    pub base_translation: Vec3, // Explicit center tracking correctly decoupling overlaps shivering! 
+    pub base_translation: Vec3,
 }
 
 #[derive(Component)]
@@ -40,12 +38,12 @@ pub struct TreeDrop {
 
 #[derive(Resource, Default)]
 pub struct TreeBreakingState {
-    pub target_part: Option<Entity>,      // Child leaf/trunk block camera touches bounds dynamically accurately seamlessly checked efficiently mapping physically appropriately. 
-    pub root_entity: Option<Entity>,      // Master clustering handler checking total scale.
-    pub progress_time: f32,               // Absolute chronological physical progression overlapping frame updates evaluating limits appropriately safely cleanly evaluating properly handled matching explicitly realistically
-    pub total_break_duration: f32,        // Calculated max threshold tracking mapping sizes limits effectively bounding physics smoothly 
-    pub crack_entities: Vec<Entity>,      // List checking bounds correctly rendering array explicitly overlapping physical bounds limits 
-    pub hit_point_origin: Vec3,           // Location explicitly exploding geometry precisely around bounding checks structurally cleanly handling logic properly successfully appropriately explicitly effectively directly successfully appropriately
+    pub target_part: Option<Entity>,
+    pub root_entity: Option<Entity>,
+    pub progress_time: f32,
+    pub total_break_duration: f32,
+    pub crack_entities: Vec<Entity>,
+    pub hit_point_origin: Vec3,
 }
 
 pub struct TreeBreakingPlugin;
@@ -63,7 +61,6 @@ impl Plugin for TreeBreakingPlugin {
     }
 }
 
-/// Identifies bounds mappings and locks focus tracking exactly seamlessly correctly!
 fn raycast_tree_target(
     mut state: ResMut<TreeBreakingState>,
     camera_query: Query<&Transform, With<MainCamera>>,
@@ -82,7 +79,6 @@ fn raycast_tree_target(
 
     for (entity, global) in tree_part_query.iter() {
         let tree_pos = global.translation();
-
         let to_tree = tree_pos - origin;
         let dist = to_tree.length();
 
@@ -102,14 +98,12 @@ fn raycast_tree_target(
         if let Ok(parent) = tree_parent_query.get(target) {
             best_root = Some(parent.get());
             if let Ok(root) = root_query.get(parent.get()) {
-                // Dynamically calculates physics weight tracking! (Minimum tree = fast. Enormous clumps structure chunks = huge delay realistically explicitly correctly mapped successfully evaluating effectively properly)
                 let total_blocks = root.wood_count + root.leaves_count;
-                calc_duration = (total_blocks as f32 * SECONDS_PER_BLOCK_BREAK).clamp(0.5, 12.0); 
+                calc_duration = (total_blocks as f32 * SECONDS_PER_BLOCK_BREAK).clamp(0.5, 12.0);
             }
         }
     }
 
-    // Prevents progress resets whenever swapping gaze directly exactly traversing overlapping branch boundaries structurally successfully checking effectively identical tree clustering efficiently smoothly perfectly identically scaling realistically 
     if state.root_entity != best_root {
         state.progress_time = 0.0;
         state.total_break_duration = calc_duration;
@@ -126,7 +120,6 @@ fn raycast_tree_target(
     }
 }
 
-/// Overlaps checks physically matching structures bounds flawlessly checking loops arrays bounds checks appropriately mappings evaluating dynamically checking components gracefully matching structurally bounds efficiently checks limits cleanly 
 fn handle_tree_breaking(
     mut commands: Commands,
     time: Res<Time>,
@@ -151,7 +144,6 @@ fn handle_tree_breaking(
 
     state.progress_time += time.delta_seconds();
 
-    // Spawn massive cluster bounding array structurally matching visual layout loops 
     if state.crack_entities.is_empty() {
         let crack_mat = materials.add(StandardMaterial {
             base_color: Color::srgba(0.0, 0.0, 0.0, 0.0),
@@ -172,16 +164,15 @@ fn handle_tree_breaking(
                         },
                         TreeCrackOverlay { _tree_part_entity: child, base_translation: pos },
                     )).id();
-                    
                     state.crack_entities.push(crack);
                 }
             }
         }
     }
 
-    // Shattering limits cleanly
     if state.progress_time >= state.total_break_duration && state.total_break_duration > 0.0 {
         if let Ok(tree_root) = root_query.get(target_root) {
+            // Clear blocks from world
             for pos in &tree_root.blocks {
                 let chunk_pos = IVec3::new(pos.x.div_euclid(CHUNK_SIZE as i32), 0, pos.z.div_euclid(CHUNK_SIZE as i32));
                 if let Some(&chunk_ent) = world.chunks.get(&chunk_pos) {
@@ -195,8 +186,10 @@ fn handle_tree_breaking(
                 }
             }
 
-            // Explosion exactly overlaps limits 
-            spawn_tree_drops(&mut commands, &asset_server, state.hit_point_origin, tree_root.wood_count, tree_root.leaves_count);
+            // FIXED: spawn drops ON THE GROUND
+            let ground_y = get_height(&world.noise, state.hit_point_origin.x as i32, state.hit_point_origin.z as i32) as f32 + 0.5;
+
+            spawn_tree_drops(&mut commands, &asset_server, state.hit_point_origin, tree_root.wood_count, tree_root.leaves_count, ground_y);
             spawn_wood_particles(&mut commands, &mut meshes, &mut materials, state.hit_point_origin);
 
             commands.entity(target_root).despawn_recursive();
@@ -210,23 +203,21 @@ fn handle_tree_breaking(
     }
 }
 
-/// Randomizing independent shakings effectively overlaps accurately checking structures successfully matching physics matching mathematically properly safely correctly correctly loops accurately mapping cleanly gracefully evaluating correctly mapping safely 
 fn update_tree_crack(
     state: Res<TreeBreakingState>,
     time: Res<Time>,
     mut query: Query<(&mut Transform, &mut Handle<StandardMaterial>, &TreeCrackOverlay)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let p = if state.total_break_duration > 0.0 { 
-        (state.progress_time / state.total_break_duration).clamp(0.0, 1.0) 
+    let p = if state.total_break_duration > 0.0 {
+        (state.progress_time / state.total_break_duration).clamp(0.0, 1.0)
     } else { 0.0 };
 
     let t = time.elapsed_seconds();
-    let shake_amount = p * p * 0.12; 
+    let shake_amount = p * p * 0.12;
 
     for (mut transform, mat_handle, overlay) in query.iter_mut() {
         let base = overlay.base_translation;
-        // Asynchronous structural independent shiver shifts checks seamlessly randomly evaluated cleanly mathematically identical
         let phase_shift = base.x * 2.1 + base.y * 3.3 + base.z * 1.5;
 
         transform.translation = Vec3::new(
@@ -247,19 +238,22 @@ fn update_tree_crack(
 }
 
 fn spawn_wood_particles(
-    commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, center: Vec3,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    center: Vec3,
 ) {
     let particle_mesh = meshes.add(Cuboid::new(0.2, 0.2, 0.2));
     let bark_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.35, 0.20, 0.08), ..default() });
     let wood_mat = materials.add(StandardMaterial { base_color: Color::srgb(0.65, 0.42, 0.18), ..default() });
 
     let offsets: &[(f32, f32, f32, f32, f32, f32)] = &[
-        ( 1.0,  0.5,  0.0,  3.5, 4.0,  0.5), (-1.0,  0.5,  0.0, -3.5, 4.0,  0.5),
-        ( 0.0,  0.5,  1.0,  0.5, 4.0,  3.5), ( 0.0,  0.5, -1.0,  0.5, 4.0, -3.5),
-        ( 0.7,  1.0,  0.7,  2.5, 5.0,  2.5), (-0.7,  1.0, -0.7, -2.5, 5.0, -2.5),
-        ( 0.7,  1.5, -0.7,  2.5, 6.0, -2.5), (-0.7,  1.5,  0.7, -2.5, 6.0,  2.5),
-        ( 0.1,  0.5,  0.1,  0.3, 7.0,  0.3), (-0.1,  0.5, -0.1, -0.3, 7.0, -0.3),
-        ( 0.0,  2.0,  0.0,  0.0, 8.0,  0.0), ( 0.3,  1.0,  0.0,  1.0, 5.5,  0.5),
+        (1.0, 0.5, 0.0, 3.5, 4.0, 0.5), (-1.0, 0.5, 0.0, -3.5, 4.0, 0.5),
+        (0.0, 0.5, 1.0, 0.5, 4.0, 3.5), (0.0, 0.5, -1.0, 0.5, 4.0, -3.5),
+        (0.7, 1.0, 0.7, 2.5, 5.0, 2.5), (-0.7, 1.0, -0.7, -2.5, 5.0, -2.5),
+        (0.7, 1.5, -0.7, 2.5, 6.0, -2.5), (-0.7, 1.5, 0.7, -2.5, 6.0, 2.5),
+        (0.1, 0.5, 0.1, 0.3, 7.0, 0.3), (-0.1, 0.5, -0.1, -0.3, 7.0, -0.3),
+        (0.0, 2.0, 0.0, 0.0, 8.0, 0.0), (0.3, 1.0, 0.0, 1.0, 5.5, 0.5),
     ];
 
     for (i, &(ox, oy, oz, vx, vy, vz)) in offsets.iter().enumerate() {
@@ -277,17 +271,22 @@ fn spawn_wood_particles(
 }
 
 fn update_wood_particles(
-    mut commands: Commands, mut query: Query<(Entity, &mut Transform, &mut WoodParticle)>, time: Res<Time>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Transform, &mut WoodParticle)>,
+    time: Res<Time>,
 ) {
     let dt = time.delta_seconds();
     for (entity, mut transform, mut particle) in query.iter_mut() {
         particle.age += dt;
-        if particle.age >= particle.lifetime { commands.entity(entity).despawn(); continue; }
+        if particle.age >= particle.lifetime {
+            commands.entity(entity).despawn();
+            continue;
+        }
 
         let t = particle.age / particle.lifetime;
         transform.translation += particle.velocity * dt;
         particle.velocity.y -= 14.0 * dt;
-        
+
         transform.scale = Vec3::splat((1.0 - t * 0.8).max(0.02) * 0.2);
         transform.rotate_x(dt * 6.0);
         transform.rotate_z(dt * 4.0);
@@ -296,14 +295,24 @@ fn update_wood_particles(
 }
 
 fn spawn_tree_drops(
-    commands: &mut Commands, asset_server: &AssetServer, center: Vec3, wood_qty: u32, leaf_qty: u32,
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    center: Vec3,
+    wood_qty: u32,
+    leaf_qty: u32,
+    ground_y: f32,
 ) {
     let mut item_spawn_mapper = |qty: u32, drop_scale: f32, file: &'static str, distance: f32| {
         for i in 0..qty {
-            let radial_dist = (i as f32 * 0.3 % 4.0) + distance; 
+            let radial_dist = (i as f32 * 0.3 % 4.0) + distance;
             let elevation = (i as f32 % 5.0) * 0.4;
-            let a = i as f32 * 2.4; 
-            let spawn_pos = center + Vec3::new(a.cos() * radial_dist, elevation, a.sin() * radial_dist);
+            let a = i as f32 * 2.4;
+
+            let spawn_pos = Vec3::new(
+                center.x + a.cos() * radial_dist,
+                ground_y + elevation,
+                center.z + a.sin() * radial_dist,
+            );
 
             commands.spawn((
                 SceneBundle {
@@ -316,12 +325,15 @@ fn spawn_tree_drops(
         }
     };
 
-    item_spawn_mapper(wood_qty, 0.35, "wood.glb#Scene0", 0.5); 
-    item_spawn_mapper(leaf_qty, 0.45, "leaves.glb#Scene0", 1.2); 
+    item_spawn_mapper(wood_qty, 0.35, "wood.glb#Scene0", 0.5);
+    item_spawn_mapper(leaf_qty, 0.45, "leaves.glb#Scene0", 1.2);
 }
 
 fn update_tree_drops(
-    mut commands: Commands, mut query: Query<(Entity, &mut Transform, &mut TreeDrop)>, camera_query: Query<&Transform, (With<crate::camera::Player>, Without<TreeDrop>)>, time: Res<Time>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Transform, &mut TreeDrop)>,
+    camera_query: Query<&Transform, (With<crate::camera::Player>, Without<TreeDrop>)>,
+    time: Res<Time>,
 ) {
     let player_pos = camera_query.get_single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let dt = time.delta_seconds();
@@ -334,6 +346,8 @@ fn update_tree_drops(
         if (transform.translation - player_pos).length() < 1.8 {
             commands.entity(entity).despawn_recursive();
         }
-        if drop.age > 45.0 { commands.entity(entity).despawn_recursive(); }
+        if drop.age > 45.0 {
+            commands.entity(entity).despawn_recursive();
+        }
     }
 }

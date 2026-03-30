@@ -12,6 +12,11 @@ pub struct RenderBlockAndNeighborsEvent {
     pub world_pos: IVec3,
 }
 
+#[derive(Component)]
+pub struct Weed {
+    pub ground_pos: IVec3,
+}
+
 #[derive(Resource)]
 pub struct World {
     pub chunks: HashMap<IVec3, Entity>,
@@ -126,7 +131,7 @@ fn fbm_noise(
     total / max_value
 }
 
-fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
+pub fn get_height(noise: &Perlin, x: i32, z: i32) -> usize {
     const CITY_RADIUS: f32 = 48.0;
     const CITY_HEIGHT: usize = 35;
 
@@ -353,8 +358,13 @@ fn tree_size_at(wx: i32, wz: i32, noise: &Perlin) -> TreeSize {
     }
 }
 
-fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32, TreeSize)> {
+fn generate_terrain(
+    chunk: &mut Chunk,
+    noise: &Perlin,
+) -> (Vec<(i32, i32, i32, TreeSize)>, Vec<(i32, i32, i32)>) {
     let mut tree_positions = Vec::with_capacity(16);
+    let mut weed_positions = Vec::with_capacity(64); // plenty of room for decorative weeds
+
     for x in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
             let world_x = chunk.position.x * CHUNK_SIZE as i32 + x as i32;
@@ -393,6 +403,8 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32, Tr
             }
 
             let dist_from_origin = ((world_x as f32).powi(2) + (world_z as f32).powi(2)).sqrt();
+            let mut is_tree_position = false;
+
             if height > 32 && height < 52 && dist_from_origin > 40.0 {
                 let grid_x = world_x.div_euclid(TREE_SPACING) * TREE_SPACING;
                 let grid_z = world_z.div_euclid(TREE_SPACING) * TREE_SPACING;
@@ -413,12 +425,30 @@ fn generate_terrain(chunk: &mut Chunk, noise: &Perlin) -> Vec<(i32, i32, i32, Tr
                             world_z,
                             tree_size_at(world_x, world_z, noise),
                         ));
+                        is_tree_position = true;
                     }
+                }
+            }
+
+            let top_block = chunk.get_block(x, height, z);
+            if matches!(top_block, BlockType::Grass) && !is_tree_position {
+                let weed_val = fbm_noise(
+                    noise,
+                    world_x as f64 * 1.5 + 500.0,
+                    world_z as f64 * 1.5 + 500.0,
+                    3,
+                    0.6,
+                    2.0,
+                );
+
+                if weed_val > 0.35 {
+                    weed_positions.push((world_x, height as i32 + 1, world_z));
                 }
             }
         }
     }
-    tree_positions
+
+    (tree_positions, weed_positions)
 }
 
 fn generate_chunks(
@@ -465,7 +495,8 @@ fn generate_chunks(
 
     for chunk_pos in pending.iter().take(2) {
         let mut chunk = Chunk::new(*chunk_pos);
-        let tree_positions = generate_terrain(&mut chunk, &world.noise);
+
+        let (tree_positions, weed_positions) = generate_terrain(&mut chunk, &world.noise);
         let surface_blocks = chunk.get_surface_blocks();
 
         for (wx, wy, wz, size) in tree_positions {
@@ -572,12 +603,27 @@ fn generate_chunks(
                             }
                         });
                 }
+
+                for (wx, wy, wz) in weed_positions {
+                    let center = Vec3::new(wx as f32 + 0.5, wy as f32 + 0.5, wz as f32 + 0.5);
+
+                    parent.spawn((
+                        SceneBundle {
+                            scene: asset_server.load("weed_1.glb#Scene0"),
+                            transform: Transform::from_translation(center)
+                                .with_scale(Vec3::splat(1.0)),
+                            ..default()
+                        },
+                        Weed {
+                            ground_pos: IVec3::new(wx, wy - 1, wz),
+                        },
+                    ));
+                }
             })
             .id();
 
         world.chunks.insert(*chunk_pos, chunk_entity);
     }
-
     let chunks_to_remove: Vec<IVec3> = world
         .chunks
         .keys()
@@ -600,6 +646,7 @@ fn sync_block_visuals(
     world: Res<World>,
     chunks: Query<&Chunk>,
     visuals: Query<(Entity, &BlockVisual)>,
+    weeds: Query<(Entity, &Weed)>,
     asset_server: Res<AssetServer>,
 ) {
     let mut broken_positions = Vec::new();
@@ -624,6 +671,17 @@ fn sync_block_visuals(
         if chunk.get_block(lx, visual.world_pos.y as usize, lz) == BlockType::Air {
             commands.entity(entity).despawn_recursive();
             broken_positions.push(visual.world_pos);
+            if chunk.get_block(lx, visual.world_pos.y as usize + 1, lz) == BlockType::Air {
+                broken_positions.push(visual.world_pos + IVec3::Y);
+            }
+        }
+    }
+    
+    let broken_set: HashSet<_> = broken_positions.iter().copied().collect();
+
+    for (weed_entity, weed) in weeds.iter() {
+        if broken_set.contains(&weed.ground_pos) {
+            commands.entity(weed_entity).despawn_recursive();
         }
     }
 
