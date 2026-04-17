@@ -3,6 +3,8 @@ use crate::camera::MainCamera;
 use crate::world::{World, get_height};   // get_height is now public
 use crate::chunk::{Chunk, CHUNK_SIZE, CHUNK_HEIGHT};
 use crate::block::BlockType;
+use crate::inventory::{Inventory, ItemKind, Pickup};
+use crate::physics::PLAYER_HEIGHT;
 
 const TREE_REACH: f32 = 6.0;
 const SECONDS_PER_BLOCK_BREAK: f32 = 0.06;
@@ -302,7 +304,11 @@ fn spawn_tree_drops(
     leaf_qty: u32,
     ground_y: f32,
 ) {
-    let mut item_spawn_mapper = |qty: u32, drop_scale: f32, file: &'static str, distance: f32| {
+    let mut item_spawn_mapper = |qty: u32,
+                                 drop_scale: f32,
+                                 file: &'static str,
+                                 distance: f32,
+                                 kind: ItemKind| {
         for i in 0..qty {
             let radial_dist = (i as f32 * 0.3 % 4.0) + distance;
             let elevation = (i as f32 % 5.0) * 0.4;
@@ -321,30 +327,39 @@ fn spawn_tree_drops(
                     ..default()
                 },
                 TreeDrop { origin_y: spawn_pos.y, age: 0.0 },
+                Pickup { kind },
             ));
         }
     };
 
-    item_spawn_mapper(wood_qty, 0.35, "wood.glb#Scene0", 0.5);
-    item_spawn_mapper(leaf_qty, 0.45, "leaves.glb#Scene0", 1.2);
+    item_spawn_mapper(wood_qty, 0.35, "wood.glb#Scene0", 0.5, ItemKind::Wood);
+    item_spawn_mapper(leaf_qty, 0.45, "leaves.glb#Scene0", 1.2, ItemKind::Leaves);
 }
 
 fn update_tree_drops(
     mut commands: Commands,
-    mut query: Query<(Entity, &mut Transform, &mut TreeDrop)>,
+    mut query: Query<(Entity, &mut Transform, &mut TreeDrop, Option<&Pickup>)>,
     camera_query: Query<&Transform, (With<crate::camera::Player>, Without<TreeDrop>)>,
+    mut inventory: ResMut<Inventory>,
     time: Res<Time>,
 ) {
-    let player_pos = camera_query.get_single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    let player_feet = camera_query
+        .get_single()
+        .map(|t| t.translation - Vec3::Y * PLAYER_HEIGHT)
+        .unwrap_or(Vec3::ZERO);
     let dt = time.delta_seconds();
 
-    for (entity, mut transform, mut drop) in query.iter_mut() {
+    for (entity, mut transform, mut drop, pickup) in query.iter_mut() {
         drop.age += dt;
         transform.translation.y = drop.origin_y + (drop.age * 2.0).sin() * 0.12;
         transform.rotate_y(dt * 1.5);
 
-        if (transform.translation - player_pos).length() < 1.8 {
+        if (transform.translation - player_feet).length() < 1.8 {
+            if let Some(p) = pickup {
+                inventory.add(p.kind, 1);
+            }
             commands.entity(entity).despawn_recursive();
+            continue;
         }
         if drop.age > 45.0 {
             commands.entity(entity).despawn_recursive();

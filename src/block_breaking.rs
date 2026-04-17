@@ -1,9 +1,10 @@
 use crate::block::BlockType;
 use crate::camera::{MainCamera, Player};
 use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE};
+use crate::inventory::{Inventory, ItemKind, Pickup};
+use crate::physics::PLAYER_HEIGHT;
 use crate::world::World as GameWorld;
-// WE IMPORT THE TREE BREAKING STATE HERE:
-use crate::tree_breaking::TreeBreakingState; 
+use crate::tree_breaking::TreeBreakingState;
 use bevy::prelude::*;
 
 const BREAK_TIME: f32 = 1.0;
@@ -367,7 +368,7 @@ fn spawn_block_drop(
         BlockType::Air => "block.glb#Scene0",
     };
 
-    commands.spawn((
+    let mut entity = commands.spawn((
         SceneBundle {
             scene: asset_server.load(scene_path),
             transform: Transform::from_translation(Vec3::new(center.x, center.y + 0.3, center.z))
@@ -380,30 +381,39 @@ fn spawn_block_drop(
             age: 0.0,
         },
     ));
+
+    if let Some(kind) = ItemKind::from_block(block_type) {
+        entity.insert(Pickup { kind });
+    }
 }
 
 fn update_block_drops(
     mut commands: Commands,
-    mut query: Query<(Entity, &mut Transform, &mut BlockDrop)>,
+    mut query: Query<(Entity, &mut Transform, &mut BlockDrop, Option<&Pickup>)>,
     player_query: Query<&Transform, (With<Player>, Without<BlockDrop>)>,
+    mut inventory: ResMut<Inventory>,
     time: Res<Time>,
 ) {
-    let player_pos = player_query
+    let player_feet = player_query
         .get_single()
-        .map(|t| t.translation)
+        .map(|t| t.translation - Vec3::Y * PLAYER_HEIGHT)
         .unwrap_or(Vec3::ZERO);
 
     let dt = time.delta_seconds();
 
-    for (entity, mut transform, mut drop) in query.iter_mut() {
+    for (entity, mut transform, mut drop, pickup) in query.iter_mut() {
         drop.age += dt;
 
         transform.translation.y = drop.origin_y + (drop.age * 2.5).sin() * 0.15;
         transform.rotate_y(dt * 1.2);
 
-        let dist = (transform.translation - player_pos).length();
-        if dist < 1.5 {
+        let dist = (transform.translation - player_feet).length();
+        if dist < 1.8 {
+            if let Some(p) = pickup {
+                inventory.add(p.kind, 1);
+            }
             commands.entity(entity).despawn_recursive();
+            continue;
         }
 
         if drop.age > 30.0 {

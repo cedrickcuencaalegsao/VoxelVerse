@@ -12,9 +12,11 @@ mod daynight;
 mod fire;
 mod hud;
 mod input;
+mod inventory;
 mod physics;
 mod tree_breaking;
 mod world;
+mod weed_breaking;
 
 use block_breaking::BlockBreakingPlugin;
 use block_registry::{BlockRegistry, BlockRegistryPlugin};
@@ -24,9 +26,11 @@ use daynight::DayNightPlugin;
 use fire::FirePlugin;
 use hud::HudPlugin;
 use input::InputPlugin;
+use inventory::InventoryPlugin;
 use physics::PhysicsPlugin;
 use tree_breaking::TreeBreakingPlugin;
 use world::WorldPlugin;
+use weed_breaking::WeedBreakingPlugin;
 
 fn main() {
     App::new()
@@ -61,6 +65,8 @@ fn main() {
             BlockBreakingPlugin,
             DayNightPlugin,
             TreeBreakingPlugin,
+            WeedBreakingPlugin,
+            InventoryPlugin,
         ))
         // Start with sunrise sky — day/night will take over immediately
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
