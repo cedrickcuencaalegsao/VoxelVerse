@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
-
 use crate::block::BlockType;
+use crate::item_preview::ItemPreviews;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemKind {
@@ -25,6 +25,7 @@ impl ItemKind {
         ItemKind::Weed,
     ];
 
+    // Kept for potential debug logging, but no longer rendered in the UI
     pub fn short(&self) -> &'static str {
         match self {
             ItemKind::Grass => "Grass",
@@ -99,16 +100,23 @@ pub struct HotbarBar {
     pub kind: ItemKind,
 }
 
+/// Marks the `ImageBundle` icon node so we can swap its image once previews load.
+#[derive(Component)]
+pub struct HotbarIcon {
+    pub kind: ItemKind,
+}
+
 pub struct InventoryPlugin;
 
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Inventory>()
             .add_systems(Startup, setup_hotbar)
-            .add_systems(Update, update_hotbar);
+            .add_systems(Update, (update_hotbar, apply_preview_images));
     }
 }
 
+// ── hotbar setup ─────────────────────────────────────────────────────────────
 fn setup_hotbar(mut commands: Commands) {
     commands
         .spawn(NodeBundle {
@@ -139,39 +147,32 @@ fn setup_hotbar(mut commands: Commands) {
                                 justify_content: JustifyContent::FlexStart,
                                 padding: UiRect::all(Val::Px(4.0)),
                                 border: UiRect::all(Val::Px(2.0)),
-                                row_gap: Val::Px(3.0),
+                                row_gap: Val::Px(5.0), // increased slightly to compensate for removed text gap
                                 ..default()
                             },
-                            background_color: BackgroundColor(Color::srgba(
-                                0.0, 0.0, 0.0, 0.55,
-                            )),
+                            background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
                             border_color: BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
                             ..default()
                         },
                         HotbarSlot { kind },
                     ))
                     .with_children(|slot| {
-                        slot.spawn(NodeBundle {
-                            style: Style {
-                                width: Val::Px(28.0),
-                                height: Val::Px(28.0),
-                                border: UiRect::all(Val::Px(1.0)),
+                        // ── icon (ImageBundle, filled later by apply_preview_images) ──
+                        slot.spawn((
+                            ImageBundle {
+                                style: Style {
+                                    width: Val::Px(36.0),
+                                    height: Val::Px(36.0),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                background_color: BackgroundColor(kind.color()),
                                 ..default()
                             },
-                            background_color: BackgroundColor(kind.color()),
-                            border_color: BorderColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-                            ..default()
-                        });
-
-                        slot.spawn(TextBundle::from_section(
-                            kind.short(),
-                            TextStyle {
-                                font_size: 10.0,
-                                color: Color::srgba(1.0, 1.0, 1.0, 0.75),
-                                ..default()
-                            },
+                            HotbarIcon { kind },
                         ));
 
+                        // ── progress bar background ───────────────────────────
                         slot.spawn(NodeBundle {
                             style: Style {
                                 width: Val::Px(44.0),
@@ -179,9 +180,7 @@ fn setup_hotbar(mut commands: Commands) {
                                 border: UiRect::all(Val::Px(1.0)),
                                 ..default()
                             },
-                            background_color: BackgroundColor(Color::srgba(
-                                1.0, 1.0, 1.0, 0.10,
-                            )),
+                            background_color: BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.10)),
                             border_color: BorderColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
                             ..default()
                         })
@@ -200,6 +199,7 @@ fn setup_hotbar(mut commands: Commands) {
                             ));
                         });
 
+                        // ── count text ────────────────────────────────────────
                         slot.spawn((
                             TextBundle::from_section(
                                 "0",
@@ -216,8 +216,23 @@ fn setup_hotbar(mut commands: Commands) {
         });
 }
 
-const HOTBAR_FULL_AT: f32 = 64.0;
+// ── apply render-target images once they are available ───────────────────────
+fn apply_preview_images(
+    mut commands: Commands,
+    previews: Res<ItemPreviews>,
+    mut icon_query: Query<(Entity, &HotbarIcon, &mut UiImage)>,
+) {
+    for (entity, icon, mut ui_image) in icon_query.iter_mut() {
+        if let Some(handle) = previews.images.get(&icon.kind) {
+            let h: Handle<Image> = handle.clone();
+            ui_image.texture = h;
+            commands.entity(entity).remove::<HotbarIcon>();
+        }
+    }
+}
 
+// ── live inventory updates ────────────────────────────────────────────────────
+const HOTBAR_FULL_AT: f32 = 64.0;
 fn update_hotbar(
     inventory: Res<Inventory>,
     mut count_query: Query<(&mut Text, &HotbarCountText)>,
@@ -226,7 +241,6 @@ fn update_hotbar(
     if !inventory.is_changed() {
         return;
     }
-
     for (mut text, tag) in count_query.iter_mut() {
         let n = inventory.get(tag.kind);
         text.sections[0].value = format!("{}", n);
@@ -236,7 +250,6 @@ fn update_hotbar(
             Color::srgba(1.0, 1.0, 1.0, 0.35)
         };
     }
-
     for (mut style, bar) in bar_query.iter_mut() {
         let n = inventory.get(bar.kind) as f32;
         let pct = (n / HOTBAR_FULL_AT * 100.0).clamp(0.0, 100.0);

@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::camera::MainCamera;
 
 #[derive(Event)]
 pub struct RenderBlockAndNeighborsEvent {
@@ -456,7 +457,7 @@ fn generate_chunks(
     mut world: ResMut<World>,
     asset_server: Res<AssetServer>,
     registry: Res<BlockRegistry>,
-    camera_query: Query<&Transform, With<Camera>>,
+    camera_query: Query<&Transform, With<MainCamera>>,
 ) {
     if !registry.loaded {
         return;

@@ -3,6 +3,11 @@ use bevy::render::RenderPlugin;
 use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 use bevy::window::PresentMode;
 
+use crate::camera::MainCamera;
+use crate::chunk::Chunk;
+use crate::world::World;
+use crate::world::{BlockVisual, World as GameWorld};
+
 mod block;
 mod block_breaking;
 mod block_registry;
@@ -17,6 +22,7 @@ mod physics;
 mod tree_breaking;
 mod world;
 mod weed_breaking;
+mod item_preview;
 
 use block_breaking::BlockBreakingPlugin;
 use block_registry::{BlockRegistry, BlockRegistryPlugin};
@@ -31,6 +37,7 @@ use physics::PhysicsPlugin;
 use tree_breaking::TreeBreakingPlugin;
 use world::WorldPlugin;
 use weed_breaking::WeedBreakingPlugin;
+use item_preview::ItemPreviewPlugin;
 
 fn main() {
     App::new()
@@ -67,10 +74,12 @@ fn main() {
             TreeBreakingPlugin,
             WeedBreakingPlugin,
             InventoryPlugin,
+            ItemPreviewPlugin,
         ))
         // Start with sunrise sky — day/night will take over immediately
         .insert_resource(ClearColor(Color::srgb(0.53, 0.81, 0.92)))
         .add_systems(Startup, (setup, set_window_title))
+        .add_systems(Update, debug_why_not_rendering)
         .run();
 }
 
@@ -94,4 +103,20 @@ fn set_window_title(world: Res<crate::world::World>, mut windows: Query<&mut Win
     if let Ok(mut window) = windows.get_single_mut() {
         window.title = format!("Voxel Verse — seed: {}", world.seed);
     }
+}
+
+fn debug_why_not_rendering(
+    chunks: Query<&Chunk>,
+    visuals: Query<&BlockVisual>,
+    camera: Query<&Transform, With<MainCamera>>,
+    world: Res<GameWorld>,
+) {
+    let chunk_count = chunks.iter().count();
+    let visual_count = visuals.iter().count();
+    let cam_pos = camera.get_single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+
+    println!(
+        "CHUNKS: {} | BLOCK VISUALS: {} | CAMERA: {:?} | WORLD CHUNKS: {}",
+        chunk_count, visual_count, cam_pos, world.chunks.len()
+    );
 }
