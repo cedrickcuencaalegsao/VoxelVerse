@@ -5,7 +5,6 @@ use bevy::window::PresentMode;
 
 use crate::camera::MainCamera;
 use crate::chunk::Chunk;
-use crate::world::World;
 use crate::world::{BlockVisual, World as GameWorld};
 
 mod block;

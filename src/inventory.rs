@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
+
 use crate::block::BlockType;
-use crate::item_preview::ItemPreviews;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemKind {
@@ -24,19 +24,6 @@ impl ItemKind {
         ItemKind::Leaves,
         ItemKind::Weed,
     ];
-
-    // Kept for potential debug logging, but no longer rendered in the UI
-    pub fn short(&self) -> &'static str {
-        match self {
-            ItemKind::Grass => "Grass",
-            ItemKind::Dirt => "Dirt",
-            ItemKind::Stone => "Stone",
-            ItemKind::Sand => "Sand",
-            ItemKind::Wood => "Wood",
-            ItemKind::Leaves => "Leaves",
-            ItemKind::Weed => "Weed",
-        }
-    }
 
     pub fn color(&self) -> Color {
         match self {
@@ -63,8 +50,6 @@ impl ItemKind {
     }
 }
 
-/// Tag placed on any ground-drop entity so the pickup systems know which
-/// item to credit to the inventory when the player walks over it.
 #[derive(Component, Clone, Copy)]
 pub struct Pickup {
     pub kind: ItemKind,
@@ -85,24 +70,19 @@ impl Inventory {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct InventoryOpen(pub bool);
+
 #[derive(Component)]
-pub struct HotbarSlot {
+pub struct InventoryPanel;
+
+#[derive(Component)]
+pub struct InventoryIcon {
     pub kind: ItemKind,
 }
 
 #[derive(Component)]
-pub struct HotbarCountText {
-    pub kind: ItemKind,
-}
-
-#[derive(Component)]
-pub struct HotbarBar {
-    pub kind: ItemKind,
-}
-
-/// Marks the `ImageBundle` icon node so we can swap its image once previews load.
-#[derive(Component)]
-pub struct HotbarIcon {
+pub struct InventoryCountText {
     pub kind: ItemKind,
 }
 
@@ -111,148 +91,203 @@ pub struct InventoryPlugin;
 impl Plugin for InventoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Inventory>()
-            .add_systems(Startup, setup_hotbar)
-            .add_systems(Update, (update_hotbar, apply_preview_images));
+            .init_resource::<InventoryOpen>()
+            .add_systems(Startup, setup_inventory_ui)
+            .add_systems(
+                Update,
+                (toggle_inventory, update_inventory_ui, apply_preview_images),
+            );
     }
 }
 
-// ── hotbar setup ─────────────────────────────────────────────────────────────
-fn setup_hotbar(mut commands: Commands) {
+fn setup_inventory_ui(mut commands: Commands) {
     commands
-        .spawn(NodeBundle {
-            style: Style {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(18.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                height: Val::Px(82.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::FlexEnd,
-                column_gap: Val::Px(6.0),
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(0.0),
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    bottom: Val::Px(0.0),
+                    ..default()
+                },
+                background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.88)), // dark "blurry" overlay
+                visibility: Visibility::Hidden,
+                z_index: ZIndex::Global(100),
                 ..default()
             },
-            z_index: ZIndex::Global(20),
-            ..default()
-        })
-        .with_children(|parent| {
-            for &kind in ItemKind::ALL {
-                parent
-                    .spawn((
-                        NodeBundle {
-                            style: Style {
-                                width: Val::Px(58.0),
-                                height: Val::Px(78.0),
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::FlexStart,
-                                padding: UiRect::all(Val::Px(4.0)),
-                                border: UiRect::all(Val::Px(2.0)),
-                                row_gap: Val::Px(5.0), // increased slightly to compensate for removed text gap
-                                ..default()
-                            },
-                            background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
-                            border_color: BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+            InventoryPanel,
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn(NodeBundle {
+                    style: Style {
+                        width: Val::Px(640.0),
+                        height: Val::Px(460.0),
+                        margin: UiRect::all(Val::Auto),
+                        align_self: AlignSelf::Center,
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::FlexStart,
+                        padding: UiRect::all(Val::Px(24.0)),
+                        border: UiRect::all(Val::Px(6.0)),
+                        ..default()
+                    },
+                    background_color: BackgroundColor(Color::srgba(0.08, 0.08, 0.12, 0.98)),
+                    border_color: BorderColor(Color::srgba(0.9, 0.85, 0.7, 0.6)),
+                    ..default()
+                })
+                .with_children(|panel| {
+                    // Title
+                    panel.spawn(TextBundle::from_section(
+                        "INVENTORY",
+                        TextStyle {
+                            font_size: 36.0,
+                            color: Color::srgb(1.0, 0.95, 0.4),
                             ..default()
                         },
-                        HotbarSlot { kind },
-                    ))
-                    .with_children(|slot| {
-                        // ── icon (ImageBundle, filled later by apply_preview_images) ──
-                        slot.spawn((
-                            ImageBundle {
-                                style: Style {
-                                    width: Val::Px(36.0),
-                                    height: Val::Px(36.0),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    ..default()
-                                },
-                                background_color: BackgroundColor(kind.color()),
-                                ..default()
-                            },
-                            HotbarIcon { kind },
-                        ));
+                    ));
 
-                        // ── progress bar background ───────────────────────────
-                        slot.spawn(NodeBundle {
+                    panel
+                        .spawn(NodeBundle {
                             style: Style {
-                                width: Val::Px(44.0),
-                                height: Val::Px(6.0),
-                                border: UiRect::all(Val::Px(1.0)),
+                                width: Val::Px(580.0),
+                                height: Val::Px(320.0),
+                                flex_wrap: FlexWrap::Wrap,
+                                justify_content: JustifyContent::Center,
+                                align_content: AlignContent::Center,
+                                column_gap: Val::Px(14.0),
+                                row_gap: Val::Px(14.0),
+                                margin: UiRect::top(Val::Px(30.0)),
                                 ..default()
                             },
-                            background_color: BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.10)),
-                            border_color: BorderColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
                             ..default()
                         })
-                        .with_children(|bar_bg| {
-                            bar_bg.spawn((
-                                NodeBundle {
-                                    style: Style {
-                                        width: Val::Percent(0.0),
-                                        height: Val::Percent(100.0),
+                        .with_children(|slots| {
+                            for &kind in ItemKind::ALL {
+                                slots
+                                    .spawn(NodeBundle {
+                                        style: Style {
+                                            width: Val::Px(78.0),
+                                            height: Val::Px(98.0),
+                                            flex_direction: FlexDirection::Column,
+                                            align_items: AlignItems::Center,
+                                            justify_content: JustifyContent::FlexStart,
+                                            padding: UiRect::all(Val::Px(8.0)),
+                                            border: UiRect::all(Val::Px(3.0)),
+                                            ..default()
+                                        },
+                                        background_color: BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                                        border_color: BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
                                         ..default()
-                                    },
-                                    background_color: BackgroundColor(kind.color()),
-                                    ..default()
-                                },
-                                HotbarBar { kind },
-                            ));
-                        });
+                                    })
+                                    .with_children(|slot| {
+                                        // Icon (starts with solid color, gets replaced by preview)
+                                        slot.spawn((
+                                            ImageBundle {
+                                                style: Style {
+                                                    width: Val::Px(52.0),
+                                                    height: Val::Px(52.0),
+                                                    ..default()
+                                                },
+                                                background_color: BackgroundColor(kind.color()),
+                                                ..default()
+                                            },
+                                            InventoryIcon { kind },
+                                        ));
 
-                        // ── count text ────────────────────────────────────────
-                        slot.spawn((
-                            TextBundle::from_section(
-                                "0",
-                                TextStyle {
-                                    font_size: 13.0,
-                                    color: Color::srgba(1.0, 1.0, 1.0, 0.4),
-                                    ..default()
-                                },
-                            ),
-                            HotbarCountText { kind },
-                        ));
-                    });
-            }
+                                        // Count text
+                                        slot.spawn((
+                                            TextBundle::from_section(
+                                                "0",
+                                                TextStyle {
+                                                    font_size: 19.0,
+                                                    color: Color::srgb(1.0, 1.0, 0.4),
+                                                    ..default()
+                                                },
+                                            ),
+                                            InventoryCountText { kind },
+                                        ));
+                                    });
+                            }
+                        });
+                });
         });
+
+    commands.spawn(NodeBundle {
+        style: Style {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(24.0),
+            left: Val::Px(24.0),
+            width: Val::Px(72.0),
+            height: Val::Px(72.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            border: UiRect::all(Val::Px(4.0)),
+            ..default()
+        },
+        background_color: BackgroundColor(Color::srgba(0.25, 0.18, 0.12, 0.95)),
+        border_color: BorderColor(Color::srgba(0.85, 0.7, 0.45, 0.9)),
+        ..default()
+    }).with_children(|bag| {
+        bag.spawn(TextBundle::from_section(
+            "👜", // will be replace 
+            TextStyle {
+                font_size: 48.0,
+                color: Color::srgb(1.0, 0.9, 0.65),
+                ..default()
+            },
+        ));
+    });
 }
 
-// ── apply render-target images once they are available ───────────────────────
-fn apply_preview_images(
-    mut commands: Commands,
-    previews: Res<ItemPreviews>,
-    mut icon_query: Query<(Entity, &HotbarIcon, &mut UiImage)>,
+fn toggle_inventory(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut open: ResMut<InventoryOpen>,
+    mut panel_query: Query<&mut Visibility, With<InventoryPanel>>,
 ) {
-    for (entity, icon, mut ui_image) in icon_query.iter_mut() {
-        if let Some(handle) = previews.images.get(&icon.kind) {
-            let h: Handle<Image> = handle.clone();
-            ui_image.texture = h;
-            commands.entity(entity).remove::<HotbarIcon>();
+    if keyboard.just_pressed(KeyCode::Tab) {
+        open.0 = !open.0;
+
+        for mut vis in &mut panel_query {
+            *vis = if open.0 {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
         }
     }
 }
 
-// ── live inventory updates ────────────────────────────────────────────────────
-const HOTBAR_FULL_AT: f32 = 64.0;
-fn update_hotbar(
+fn update_inventory_ui(
     inventory: Res<Inventory>,
-    mut count_query: Query<(&mut Text, &HotbarCountText)>,
-    mut bar_query: Query<(&mut Style, &HotbarBar)>,
+    mut count_query: Query<(&mut Text, &InventoryCountText)>,
 ) {
     if !inventory.is_changed() {
         return;
     }
+
     for (mut text, tag) in count_query.iter_mut() {
         let n = inventory.get(tag.kind);
         text.sections[0].value = format!("{}", n);
         text.sections[0].style.color = if n > 0 {
             Color::srgb(1.0, 1.0, 0.4)
         } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.35)
+            Color::srgba(1.0, 1.0, 1.0, 0.4)
         };
     }
-    for (mut style, bar) in bar_query.iter_mut() {
-        let n = inventory.get(bar.kind) as f32;
-        let pct = (n / HOTBAR_FULL_AT * 100.0).clamp(0.0, 100.0);
-        style.width = Val::Percent(pct);
+}
+
+fn apply_preview_images(
+    mut commands: Commands,
+    previews: Res<crate::item_preview::ItemPreviews>,
+    mut icon_query: Query<(Entity, &InventoryIcon, &mut UiImage)>,
+) {
+    for (entity, icon, mut ui_image) in icon_query.iter_mut() {
+        if let Some(handle) = previews.images.get(&icon.kind) {
+            ui_image.texture = handle.clone();
+            commands.entity(entity).remove::<InventoryIcon>();
+        }
     }
 }
